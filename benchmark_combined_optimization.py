@@ -1,6 +1,6 @@
 import csv
 from pathlib import Path
-
+from src.thermal_analysis import analyze_thermal_limits
 import networkx as nx
 from opendssdirect import dss
 
@@ -27,6 +27,8 @@ LOAD_TOLERANCE_KW = 0.01
 
 CAPACITOR_BUSES = [18, 25, 30, 33]
 CAPACITOR_SIZES_KVAR = [150, 300, 450, 600, 900]
+# Only verified ampacity ratings should be entered here.
+THERMAL_AMPACITY_RATINGS_A = {}
 
 
 def build_circuit(
@@ -121,6 +123,31 @@ def build_circuit(
         raise RuntimeError("No energized bus voltages returned.")
 
     losses = dss.Circuit.Losses()
+    thermal = analyze_thermal_limits(
+        ampacity_ratings_a=THERMAL_AMPACITY_RATINGS_A
+    )
+
+    thermal_results = thermal["results"]
+
+    thermal_violation_count = sum(
+        result.status == "VIOLATION"
+        for result in thermal_results
+    )
+
+    thermal_unassessed_count = sum(
+        result.status == "UNASSESSED"
+        for result in thermal_results
+    )
+
+    # Include branch-level details in the CSV for later investigation.
+    thermal_branch_details = "; ".join(
+        (
+            f"{result.branch_id}:"
+            f"{result.measured_current_a:.3f}A:"
+            f"{result.status}"
+        )
+        for result in thermal_results
+    )
 
     return {
         "powerflow_converged": True,
@@ -129,6 +156,11 @@ def build_circuit(
         "real_losses_kw": losses[0] / 1000,
         "reactive_losses_kvar": losses[1] / 1000,
         "energized_phase_nodes": len(voltages),
+        "thermal_status": thermal["thermal_status"],
+        "thermal_violation_count": thermal_violation_count,
+        "thermal_unassessed_count": thermal_unassessed_count,
+        "thermal_branch_count": thermal["branch_count"],
+        "thermal_branch_details": thermal_branch_details,
     }
 
 
@@ -198,7 +230,19 @@ def evaluate_configuration(
         "topology_errors": "; ".join(errors),
         "powerflow_converged": False,
         "voltage_feasible": False,
+
+        # Existing feasibility means topology/load/voltage feasibility.
         "feasible": False,
+
+        # Thermal compliance is separate from existing feasibility.
+        "thermal_status": "UNASSESSED",
+        "thermal_violation_count": 0,
+        "thermal_unassessed_count": 0,
+        "thermal_branch_count": 0,
+        "thermal_branch_details": "",
+        "thermal_feasible": None,
+        "fully_assessed_feasible": False,
+
         "feasibility_notes": "",
     }
 
@@ -226,6 +270,19 @@ def evaluate_configuration(
         return row
 
     row.update(electrical)
+    thermal_status = electrical["thermal_status"]
+
+    if thermal_status == "VIOLATION":
+        row["thermal_feasible"] = False
+    elif thermal_status == "PASS":
+        row["thermal_feasible"] = True
+    else:
+        row["thermal_feasible"] = None
+        # Strict feasibility requires verified thermal compliance too.
+        row["fully_assessed_feasible"] = (
+                row["feasible"]
+                and row["thermal_feasible"] is True
+        )
 
     phase_nodes_ok = (
         electrical["energized_phase_nodes"] == EXPECTED_PHASE_NODES
@@ -496,7 +553,31 @@ def main():
             "No fully connected, converged candidate "
             "available for diagnosis."
         )
+    thermal_assessed = [
+        row for row in rows
+        if row.get("thermal_status") == "PASS"
+    ]
 
+    thermal_violations = [
+        row for row in rows
+        if row.get("thermal_status") == "VIOLATION"
+    ]
+
+    thermal_unassessed = [
+        row for row in rows
+        if row.get("thermal_status") == "UNASSESSED"
+    ]
+
+    fully_assessed = [
+        row for row in rows
+        if row.get("fully_assessed_feasible", False)
+    ]
+
+    print("\nThermal assessment")
+    print(f"Thermal PASS scenarios: {len(thermal_assessed)}")
+    print(f"Thermal VIOLATION scenarios: {len(thermal_violations)}")
+    print(f"Thermal UNASSESSED scenarios: {len(thermal_unassessed)}")
+    print(f"Fully assessed feasible scenarios: {len(fully_assessed)}")
     print(f"Results saved: {output}")
 
 

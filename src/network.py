@@ -66,41 +66,96 @@ class DistributionNetwork:
             if bus_id in supplied
         )
 
+
     def validate_topology(
-        self, closed_ties=None, opened_branches=None,
-        faulted_branches=None
+        self,
+        closed_ties=None,
+        opened_branches=None,
+        faulted_branches=None,
     ):
+        """Validate switching requests and ensure the resulting graph is radial.
+
+        Disconnected components are allowed because a fault may leave
+        sections de-energized. Source connectivity and served load are
+        evaluated separately.
+        """
         closed_ties = set(closed_ties or [])
         opened_branches = set(opened_branches or [])
         faulted_branches = set(faulted_branches or [])
 
         errors = []
+
+        # Every referenced branch must exist.
         requested = closed_ties | opened_branches | faulted_branches
 
-        for bid in requested:
+        for bid in sorted(requested):
             if bid not in self.branch_by_id:
                 errors.append(f"Unknown branch ID: {bid}")
 
-        for bid in closed_ties:
-            branch = self.branch_by_id.get(bid)
-            if branch and branch.normally_closed:
-                errors.append(f"{bid} is not a normally-open tie.")
+        if errors:
+            return errors
 
-        for bid in opened_branches:
-            branch = self.branch_by_id.get(bid)
-            if branch and not branch.normally_closed:
-                errors.append(f"{bid} is not a normally-closed branch.")
-            if branch and not branch.switchable:
-                errors.append(f"{bid} is not switchable.")
+        # A branch cannot be faulted and simultaneously requested
+        # to be switched as part of the same restoration plan.
+        conflicts = faulted_branches & (
+            closed_ties | opened_branches
+        )
+
+        for bid in sorted(conflicts):
+            errors.append(
+                f"{bid} is faulted and cannot also be switched."
+            )
+
+        # A branch cannot be both opened and closed by one plan.
+        conflicts = closed_ties & opened_branches
+
+        for bid in sorted(conflicts):
+            errors.append(
+                f"{bid} cannot be both opened and closed."
+            )
+
+        # Only normally-open, switchable branches may be closed as ties.
+        for bid in sorted(closed_ties):
+            branch = self.branch_by_id[bid]
+
+            if branch.normally_closed:
+                errors.append(
+                    f"{bid} is not a normally-open tie."
+                )
+
+            if not branch.switchable:
+                errors.append(
+                    f"{bid} is not switchable."
+                )
+
+        # Only normally-closed, switchable branches may be opened.
+        for bid in sorted(opened_branches):
+            branch = self.branch_by_id[bid]
+
+            if not branch.normally_closed:
+                errors.append(
+                    f"{bid} is not a normally-closed branch."
+                )
+
+            if not branch.switchable:
+                errors.append(
+                    f"{bid} is not switchable."
+                )
 
         if errors:
             return errors
 
         graph = self.build_graph(
-            closed_ties, opened_branches, faulted_branches
+            closed_ties=closed_ties,
+            opened_branches=opened_branches,
+            faulted_branches=faulted_branches,
         )
 
+        # A radial distribution topology must contain no cycles.
+        # Multiple tree components are permitted during an outage.
         if not nx.is_forest(graph):
-            errors.append("Topology is not radial; a cycle exists.")
+            errors.append(
+                "Topology is not radial; a cycle exists."
+            )
 
         return errors

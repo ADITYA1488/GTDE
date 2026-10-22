@@ -94,6 +94,7 @@ def solve_case(capacitor_bus=None, capacitor_kvar=0,
         )
 
     losses = dss.Circuit.Losses()
+
     min_v = min(voltages)
     max_v = max(voltages)
 

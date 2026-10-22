@@ -1,4 +1,5 @@
 from src.network import Branch, DistributionNetwork
+from src.ieee33_electrical_data import MAIN_BRANCHES, TIE_BRANCHES
 
 
 def build_ieee33_network():
@@ -51,6 +52,7 @@ def build_ieee33_network():
                 v=v,
                 normally_closed=True,
                 switchable=True,
+                resistance_ohm=MAIN_BRANCHES[index - 1][2],
             )
         )
 
@@ -62,6 +64,7 @@ def build_ieee33_network():
                 v=v,
                 normally_closed=False,
                 switchable=True,
+                resistance_ohm=TIE_BRANCHES[index - 33][2],
             )
         )
 

@@ -1,8 +1,12 @@
+"""Bounded-memory graph-based restoration candidate generation.
 
-from itertools import combinations
+The ranking proxy is not a physical loss calculation. Final electrical
+feasibility and physical real losses must come from OpenDSS.
+"""
 from dataclasses import dataclass, field
-
-import networkx as nx
+from itertools import combinations
+import heapq
+import math
 
 
 @dataclass
@@ -19,59 +23,119 @@ class RestorationPlan:
     score: float = 0.0
 
 
-def _loss_proxy(net, graph):
-    """Calculate a graph-ranking proxy, NOT physical electrical losses.
+def _candidate_state(net, close, opened, faulted):
+    """Return (valid, errors, supplied buses, adjacency) without NetworkX.
 
-    For a valid radial, source-connected graph, root the tree at the source.
-    Calculate downstream load once per node instead of copying the graph
-    and performing a connectivity search for every edge.
-
-    Complexity: O(V + E) for a tree.
+    A disjoint-set check detects cycles, then a small BFS finds the source-
+    connected section. This is substantially cheaper than allocating a
+    NetworkX graph for every switching combination.
     """
-    supplied = net.supplied_buses(graph)
+    errors = []
+    close_set, opened_set, faulted_set = set(close), set(opened), set(faulted)
+    requested = close_set | opened_set | faulted_set
+    unknown = sorted(requested - set(net.branch_by_id))
+    if unknown:
+        return False, [f"Unknown branch ID: {bid}" for bid in unknown], [], {}
 
-    if not supplied or net.source_bus not in supplied:
-        return 0.0
+    if close_set & opened_set:
+        errors.append("A branch cannot be both opened and closed.")
+    if faulted_set & (close_set | opened_set):
+        errors.append("A faulted branch cannot also be switched.")
 
-    tree = graph.subgraph(supplied)
+    for bid in close_set:
+        branch = net.branch_by_id[bid]
+        if branch.normally_closed or not branch.switchable:
+            errors.append(f"{bid} is not a switchable normally-open tie.")
+    for bid in opened_set:
+        branch = net.branch_by_id[bid]
+        if not branch.normally_closed or not branch.switchable:
+            errors.append(f"{bid} is not a switchable normally-closed branch.")
+    if errors:
+        return False, errors, [], {}
 
-    if tree.number_of_edges() == 0:
-        return 0.0
+    parent = {bus: bus for bus in net.buses}
+    rank = {bus: 0 for bus in net.buses}
 
-    # This proxy assumes the supplied network is radial.
-    if not nx.is_tree(tree):
-        raise ValueError(
-            "The loss proxy requires a connected radial supplied network."
+    def find(bus):
+        while parent[bus] != bus:
+            parent[bus] = parent[parent[bus]]
+            bus = parent[bus]
+        return bus
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return False
+        if rank[ra] < rank[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra
+        if rank[ra] == rank[rb]:
+            rank[ra] += 1
+        return True
+
+    adjacency = {bus: [] for bus in net.buses}
+    for branch in net.branches:
+        bid = branch.branch_id
+        active = bid not in opened_set and bid not in faulted_set and (
+            branch.normally_closed or bid in close_set
         )
+        if not active:
+            continue
+        if not union(branch.u, branch.v):
+            return False, ["Topology is not radial; a cycle exists."], [], {}
+        adjacency[branch.u].append((branch.v, branch))
+        adjacency[branch.v].append((branch.u, branch))
 
+    if net.source_bus not in adjacency:
+        return False, ["Source bus is missing from the network."], [], {}
+
+    supplied = set()
+    stack = [net.source_bus]
+    while stack:
+        bus = stack.pop()
+        if bus in supplied:
+            continue
+        supplied.add(bus)
+        stack.extend(neighbor for neighbor, _ in adjacency[bus] if neighbor not in supplied)
+
+    return True, [], sorted(supplied), adjacency
+
+
+def _loss_proxy(net, supplied_buses, adjacency):
+    """Calculate a simple resistance/downstream-load ranking proxy (not kW losses)."""
+    supplied = set(supplied_buses)
     source = net.source_bus
+    if source not in supplied:
+        return 0.0
 
-    # Build a rooted traversal of the tree.
-    order = list(nx.dfs_preorder_nodes(tree, source))
-    parents = dict(nx.dfs_predecessors(tree, source))
-
-    # Start with the load at each node.
-    subtree_load = {
-        node: float(net.buses[node].get("load_kw", 0.0))
-        for node in order
-    }
-
-    # Accumulate each child's downstream load into its parent.
-    for node in reversed(order):
-        parent = parents.get(node)
+    order, parents = [], {}
+    stack = [(source, None)]
+    seen = set()
+    while stack:
+        bus, parent = stack.pop()
+        if bus in seen:
+            continue
+        seen.add(bus)
+        order.append(bus)
         if parent is not None:
-            subtree_load[parent] += subtree_load[node]
+            parents[bus] = parent
+        for neighbor, branch in adjacency[bus]:
+            if neighbor in supplied and neighbor not in seen:
+                stack.append((neighbor, bus))
 
-    # Each parent-child edge carries the load in the child's subtree.
+    subtree_load = {
+        bus: float(net.buses[bus].get("load_kw", 0.0)) for bus in order
+    }
+    for bus in reversed(order):
+        parent = parents.get(bus)
+        if parent is not None:
+            subtree_load[parent] += subtree_load[bus]
+
     total = 0.0
-
-    for node, parent in parents.items():
-        edge_data = tree[parent][node]
-        resistance = float(edge_data.get("resistance_ohm", 0.2))
-        downstream_load_mw = subtree_load[node] / 1000.0
-
-        total += resistance * downstream_load_mw**2
-
+    for bus, parent in parents.items():
+        branch = next(b for neighbor, b in adjacency[parent] if neighbor == bus)
+        downstream_mw = subtree_load[bus] / 1000.0
+        total += float(branch.resistance_ohm) * downstream_mw**2
     return round(total, 6)
 
 
@@ -81,106 +145,72 @@ def find_restoration_plans(
     max_operations=3,
     max_results=10,
 ):
-    """Enumerate, validate and rank graph-based restoration plans.
+    """Enumerate switching combinations but retain only the best ``max_results``.
 
-    Ranking prioritizes valid plans, restored load, fewer switching
-    operations, and then the graph-based loss proxy.
-
-    The proxy is not a substitute for OpenDSS power-flow analysis.
+    Memory usage is O(max_results), rather than storing every combination.
+    Candidate generation still considers the requested operation-depth search;
+    use a small max_operations value for practical restoration searches.
     """
     faulted = set(faulted_branches or [])
-
-    if max_operations < 0:
-        raise ValueError("max_operations must be non-negative")
-
+    if isinstance(max_operations, bool) or not isinstance(max_operations, int) or max_operations < 0:
+        raise ValueError("max_operations must be a non-negative integer")
+    if isinstance(max_results, bool) or not isinstance(max_results, int):
+        raise ValueError("max_results must be a positive integer")
     if max_results < 1:
         return []
 
-    ties = [
-        branch.branch_id
-        for branch in net.branches
-        if not branch.normally_closed
-        and branch.branch_id not in faulted
-    ]
+    unknown_faults = sorted(faulted - set(net.branch_by_id))
+    if unknown_faults:
+        raise ValueError(f"Unknown faulted branch IDs: {', '.join(unknown_faults)}")
 
-    lines = [
-        branch.branch_id
-        for branch in net.branches
-        if branch.normally_closed
-        and branch.switchable
-        and branch.branch_id not in faulted
-    ]
-
+    ties = [b.branch_id for b in net.branches
+            if not b.normally_closed and b.switchable and b.branch_id not in faulted]
+    lines = [b.branch_id for b in net.branches
+             if b.normally_closed and b.switchable and b.branch_id not in faulted]
     total_load = net.total_load_kw()
-    plans = []
+    heap = []
+    serial = 0
 
-    for number_closed in range(
-        min(len(ties), max_operations) + 1
-    ):
-        for close in combinations(ties, number_closed):
-            remaining_budget = max_operations - number_closed
-
-            for number_opened in range(
-                min(len(lines), remaining_budget) + 1
-            ):
-                for opened in combinations(lines, number_opened):
-                    # Validate topology before computing the loss proxy.
-                    errors = net.validate_topology(
-                        close, opened, faulted
+    for nclose in range(min(len(ties), max_operations) + 1):
+        for close in combinations(ties, nclose):
+            remaining = max_operations - nclose
+            for nopen in range(min(len(lines), remaining) + 1):
+                for opened in combinations(lines, nopen):
+                    valid, errors, supplied, adjacency = _candidate_state(
+                        net, close, opened, faulted
                     )
-                    graph = net.build_graph(
-                        close, opened, faulted
-                    )
-
-                    # Determine source-connected buses once per candidate.
-                    supplied = sorted(net.supplied_buses(graph))
-
                     restored = sum(
-                        float(net.buses[bus].get("load_kw", 0.0))
-                        for bus in supplied
+                        float(net.buses[bus].get("load_kw", 0.0)) for bus in supplied
                     )
+                    pct = 100.0 * restored / total_load if total_load else 100.0
+                    operations = nclose + nopen
 
-                    pct = (
-                        100.0 * restored / total_load
-                        if total_load
-                        else 100.0
-                    )
-
-                    if errors:
-                        proxy = float("inf")
+                    if valid:
+                        # Loss proxy only affects ordering after restored load and
+                        # switching count; calculate it only for graph-valid plans.
+                        proxy = _loss_proxy(net, supplied, adjacency)
                     else:
-                        proxy = _loss_proxy(net, graph)
+                        proxy = math.inf
 
-                    operations = number_closed + number_opened
-
-                    score = pct - operations * 1.5 - (
-                        proxy * 0.01
-                        if proxy != float("inf")
-                        else 1e9
+                    score = pct - operations * 1.5 - (proxy * 0.01 if math.isfinite(proxy) else 1e9)
+                    plan = RestorationPlan(
+                        close_ties=list(close), open_branches=list(opened),
+                        restored_kw=round(restored, 3), restoration_pct=round(pct, 2),
+                        switching_operations=operations, supplied_buses=supplied,
+                        valid=valid, errors=errors, estimated_loss_kw=proxy,
+                        score=round(score, 4),
                     )
+                    # Larger rank is better: restore more load, use fewer
+                    # operations, then prefer the smaller proxy.
+                    rank_key = (plan.restored_kw, -operations, -proxy)
+                    item = (rank_key, serial, plan)
+                    serial += 1
+                    if len(heap) < max_results:
+                        heapq.heappush(heap, item)
+                    elif rank_key > heap[0][0]:
+                        heapq.heapreplace(heap, item)
 
-                    plans.append(
-                        RestorationPlan(
-                            close_ties=list(close),
-                            open_branches=list(opened),
-                            restored_kw=round(restored, 3),
-                            restoration_pct=round(pct, 2),
-                            switching_operations=operations,
-                            supplied_buses=supplied,
-                            valid=not errors,
-                            errors=errors,
-                            estimated_loss_kw=proxy,
-                            score=round(score, 4),
-                        )
-                    )
-
-    plans.sort(
-        key=lambda plan: (
-            not plan.valid,
-            -plan.restored_kw,
-            plan.switching_operations,
-            plan.estimated_loss_kw,
-        )
-    )
-
-    return plans[:max_results]
+    plans = [item[2] for item in heap]
+    plans.sort(key=lambda p: (not p.valid, -p.restored_kw,
+                              p.switching_operations, p.estimated_loss_kw))
+    return plans
