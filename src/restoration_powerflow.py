@@ -1,7 +1,7 @@
 """Bounded graph-based restoration search with OpenDSS validation."""
 from dataclasses import dataclass
 from typing import Callable
-
+from src.restoration_objectives import restoration_rank
 from src.restoration import find_restoration_plans
 from src.ieee33_powerflow import evaluate_ieee33_configuration
 
@@ -270,15 +270,5 @@ def evaluate_restoration_plans(
                 ))
             evaluate_and_report(remaining[0])
 
-    results.sort(key=lambda r: (
-        not (
-                r.converged
-                and r.voltage_feasible
-                and r.graph_electrical_consistent
-                and r.thermal_status == "PASS"
-        ),
-        -r.plan.restored_kw,
-        r.real_losses_kw if r.real_losses_kw is not None else float("inf"),
-        r.plan.switching_operations,
-    ))
+    results.sort(key=restoration_rank)
     return results[:max_results]
