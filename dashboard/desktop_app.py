@@ -25,6 +25,11 @@ except ImportError as exc:
 
 from src.ieee33_network import build_ieee33_network
 from src.restoration_powerflow import evaluate_restoration_plans
+from dashboard.verification import (
+    candidate_summary,
+    is_fully_verified,
+    passes_electrical_checks,
+)
 
 STYLE = """
 QMainWindow,QWidget{background:#171a21;color:#e8edf5;font-size:13px}
@@ -42,12 +47,7 @@ QHeaderView::section{background:#2a3040;color:#e8edf5;padding:6px;border:0}
 
 
 def feasible(r):
-    return (
-        r.converged
-        and r.voltage_feasible
-        and r.graph_electrical_consistent
-        and r.thermal_status == "PASS"
-    )
+    return is_fully_verified(r)
 
 
 class Worker(QObject):
@@ -174,10 +174,16 @@ class GTDEWindow(QMainWindow):
         rv = QVBoxLayout(right)
         cards = QHBoxLayout()
         self.m_feasible = Metric("Fully verified candidates")
-        self.m_load = Metric("Restored load")
+        self.m_thermal_unassessed = Metric(
+            "Electrical checks pass; thermal UNASSESSED"
+        )
+        self.m_load = Metric("Graph-connected load")
         self.m_voltage = Metric("Minimum voltage")
         self.m_loss = Metric("Real losses")
-        for m in (self.m_feasible, self.m_load, self.m_voltage, self.m_loss):
+        for m in (
+            self.m_feasible, self.m_thermal_unassessed,
+            self.m_load, self.m_voltage, self.m_loss,
+        ):
             cards.addWidget(m)
         rv.addLayout(cards)
         self.summary = QLabel("Run a restoration to inspect candidate plans.")
@@ -191,12 +197,13 @@ class GTDEWindow(QMainWindow):
         )
         rv.addWidget(self.plot, 1)
 
-        self.table = QTableWidget(0, 13)
+        self.table = QTableWidget(0, 16)
         self.table.setHorizontalHeaderLabels([
-            "Rank", "Close ties", "Open branches", "Restored kW",
-            "Restoration %", "Operations", "Converged", "Voltage OK",
+            "Rank", "Close ties", "Open branches", "Graph-connected kW",
+            "Graph-connected %", "Operations", "Converged", "Voltage OK",
+            "Graph consistent", "Electrical checks pass", "Fully verified",
             "Min V pu", "Max V pu", "Losses kW", "Thermal status",
-            "Rejection reason"
+            "Rejection reason",
         ])
 
         self.table.setAlternatingRowColors(True)
@@ -247,26 +254,48 @@ class GTDEWindow(QMainWindow):
     @Slot(object, float)
     def on_done(self, results, elapsed):
         self.results = list(results)
-        good = [r for r in self.results if feasible(r)]
-        best = good[0] if good else None
-        self.m_feasible.value.setText(f"{len(good)} / {len(self.results)}")
+        summary = candidate_summary(self.results)
+        verified = summary["fully_verified"]
+        best = summary["selected"]
+        self.m_feasible.value.setText(
+            f"{len(verified)} / {len(self.results)}"
+        )
         self.m_feasible.note.setText(
-            "Requires convergence, voltage compliance, topology consistency, and thermal PASS"
+            "Requires convergence, voltage compliance, graph consistency, and thermal PASS"
+        )
+        self.m_thermal_unassessed.value.setText(
+            f"{len(summary['thermal_unassessed'])} / {len(self.results)}"
+        )
+        self.m_thermal_unassessed.note.setText(
+            "Passes convergence, voltage, and graph checks; thermal compliance is unassessed"
         )
         self.m_load.value.setText(f"{best.plan.restored_kw:,.1f} kW" if best else "None")
-        self.m_load.note.setText(f"{best.plan.restoration_pct:.2f}% restored" if best else "No feasible plan")
+        self.m_load.note.setText(
+            "Demand at source-connected buses; not necessarily voltage-compliant served load"
+        )
         self.m_voltage.value.setText(f"{best.min_voltage_pu:.4f} pu" if best and best.min_voltage_pu is not None else "—")
         self.m_voltage.note.setText("Required: 0.95–1.05 pu")
         self.m_loss.value.setText(f"{best.real_losses_kw:.3f} kW" if best and best.real_losses_kw is not None else "—")
         self.m_loss.note.setText(f"Runtime: {elapsed:.2f} s")
-        if best:
+        if best and summary["provisional"]:
+            thermal_warning = (
+                "Thermal compliance is unverified; do not treat this plan as fully validated."
+                if best.thermal_status == "UNASSESSED"
+                else f"Thermal status is {best.thermal_status}; do not treat this plan as fully validated."
+            )
             self.summary.setText(
-                f"Best feasible plan: close {', '.join(best.plan.close_ties) or 'none'}; "
+                f"Provisional recommendation (electrically feasible): close "
+                f"{', '.join(best.plan.close_ties) or 'none'}; "
                 f"open {', '.join(best.plan.open_branches) or 'none'}. "
-                "Thermal safety is not verified."
+                f"{thermal_warning}"
+            )
+        elif best:
+            self.summary.setText(
+                f"Fully verified candidate: close {', '.join(best.plan.close_ties) or 'none'}; "
+                f"open {', '.join(best.plan.open_branches) or 'none'}."
             )
         else:
-            self.summary.setText("No candidate passed all current electrical checks. Do not use an infeasible plan as a recommendation.")
+            self.summary.setText("No candidate passed all electrical checks. No recommendation is available.")
         self.table.setRowCount(len(self.results))
         for i, r in enumerate(self.results):
 
@@ -279,6 +308,9 @@ class GTDEWindow(QMainWindow):
                 str(r.plan.switching_operations),
                 str(r.converged),
                 str(r.voltage_feasible),
+                str(r.graph_electrical_consistent),
+                str(passes_electrical_checks(r)),
+                str(feasible(r)),
                 f"{r.min_voltage_pu:.4f}" if r.min_voltage_pu is not None else "—",
                 f"{r.max_voltage_pu:.4f}" if r.max_voltage_pu is not None else "—",
                 f"{r.real_losses_kw:.3f}" if r.real_losses_kw is not None else "—",
@@ -303,29 +335,19 @@ class GTDEWindow(QMainWindow):
         self.table.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
-        self.table.setColumnWidth(11, 240)
-
         for column, width in {
             0: 55, 1: 110, 2: 130, 3: 100, 4: 105,
-            5: 90, 6: 90, 7: 95, 8: 90, 9: 90,
-            10: 100, 11: 130, 12: 240,
+            5: 90, 6: 90, 7: 95, 8: 105, 9: 130,
+            10: 105, 11: 90, 12: 90, 13: 100, 14: 150, 15: 240,
         }.items():
             self.table.setColumnWidth(column, width)
-
-        self.table.setColumnWidth(1, 110)
-        self.table.setColumnWidth(2, 130)
-        self.table.setColumnWidth(3, 100)
-        self.table.setColumnWidth(4, 105)
-        self.table.setColumnWidth(5, 90)
-        self.table.setColumnWidth(6, 90)
-        self.table.setColumnWidth(7, 95)
-        self.table.setColumnWidth(8, 90)
-        self.table.setColumnWidth(9, 90)
-        self.table.setColumnWidth(10, 100)
-        self.table.setColumnWidth(11, 240)
         self.show_chart(self.results)
         self.progress.setValue(100)
-        self.progress_text.setText(f"Finished: {len(self.results)} candidates; {len(good)} feasible.")
+        self.progress_text.setText(
+            f"Finished: {len(self.results)} candidates; "
+            f"{len(verified)} fully verified; "
+            f"{len(summary['thermal_unassessed'])} electrical pass / thermal unassessed."
+        )
         self.status.setText(f"Completed in {elapsed:.2f}s")
         self.run_button.setEnabled(True)
         self.export.setEnabled(bool(self.results))
@@ -410,10 +432,16 @@ class GTDEWindow(QMainWindow):
             rows.append({
                 "rank": i, "close_ties": ";".join(r.plan.close_ties),
                 "open_branches": ";".join(r.plan.open_branches),
-                "restored_kw": r.plan.restored_kw, "restoration_pct": r.plan.restoration_pct,
+                # Legacy columns retained for exported-CSV compatibility.
+                "restored_kw": r.plan.restored_kw,
+                "restoration_pct": r.plan.restoration_pct,
+                "graph_connected_load_kw": r.plan.restored_kw,
+                "graph_connected_restoration_pct": r.plan.restoration_pct,
                 "switching_operations": r.plan.switching_operations, "converged": r.converged,
                 "voltage_feasible": r.voltage_feasible,
                 "graph_electrical_consistent": r.graph_electrical_consistent,
+                "electrical_checks_pass": passes_electrical_checks(r),
+                "fully_verified": feasible(r),
                 "min_voltage_pu": r.min_voltage_pu, "max_voltage_pu": r.max_voltage_pu,
                 "real_losses_kw": r.real_losses_kw, "thermal_status": r.thermal_status,
                 "rejection_reason": r.rejection_reason,

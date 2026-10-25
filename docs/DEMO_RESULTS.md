@@ -78,6 +78,8 @@ Recorded interface settings and outcomes:
 
 | Fully verified candidates | 0 |
 
+| Capacitor support | Enabled: 900 kvar at bus 33 |
+
 | Runtime displayed | Approximately 1.26 seconds |
 
 
@@ -96,7 +98,7 @@ The interface displays candidate switching configurations and their electrical r
 
 \- Closed tie switches and opened branches.
 
-\- Restored load and restoration percentage.
+\- Graph-connected load and restoration percentage.
 
 \- Switching-operation count.
 
@@ -112,7 +114,7 @@ The interface displays candidate switching configurations and their electrical r
 
 
 
-The demonstration included candidates with acceptable voltage results and lower real-power losses than the baseline configuration. However, these results alone do not establish complete feasibility or operational safety.
+The demonstration used the desktop application's default capacitor support: 900 kvar at bus 33. It included candidates with acceptable voltage results and lower real-power losses than the no-capacitor baseline configuration. These results alone do not establish complete feasibility or operational safety.
 
 
 
@@ -134,6 +136,32 @@ Consequently, thermal compliance remains `UNASSESSED`. The application must not 
 
 This is a known limitation of the available benchmark data and does not mean that thermal-analysis code is absent.
 
+\## No-Capacitor Voltage Diagnostic and Recovery-Path Comparison
+
+A separate controlled diagnostic used the IEEE 33-bus feeder without capacitor support, 3 switching operations, an evaluation budget of 10, and voltage limits of 0.95–1.05 p.u. The baseline minimum was **0.916109 p.u. at bus 18**, already below the lower limit. Across faults L04, L05, L10, and L20, 10 candidates per fault were evaluated. All 40 converged and were graph/electrically consistent, but all 40 failed voltage compliance. Their reported **3715 kW** is graph-connected load, not voltage-compliant served load.
+
+| Fault | Evaluated | Converged and graph/electrically consistent | Voltage-compliant | Candidate minimum-voltage range (p.u.) | Candidate maximum-voltage range (p.u.) |
+|---|---:|---:|---:|---:|---:|
+| L04 | 10 | 10 | 0 | 0.816999–0.927513 | 0.998370–0.998488 |
+| L05 | 10 | 10 | 0 | 0.820407–0.927511 | 0.998371–0.998484 |
+| L10 | 10 | 10 | 0 | 0.881945–0.936854 | 0.998376–0.998413 |
+| L20 | 10 | 10 | 0 | 0.908095–0.926451 | 0.998377–0.998401 |
+
+The separate `benchmark_ieee33.py` experiment uses 900 kvar capacitor support at bus 33; its results must be interpreted separately. In the recovery-path comparison, the priority changed some retained plans but did not change evaluated outcomes. No improvement in evaluated electrical results was demonstrated. Thermal compliance remained `UNASSESSED` in both experimental configurations because verified ampacity ratings were unavailable.
+
+The separate capacitor-supported benchmark evaluated 10 candidates per fault with 3 switching operations and a 10-candidate electrical budget. Baseline and adaptive produced the same electrically feasible counts:
+
+| Fault | Electrically feasible candidates | Lowest-loss result, if any | Minimum voltage |
+|---|---:|---:|---:|
+| L05 | 0 | — | — |
+| L10 | 4 | 113.747 kW | 0.9513 p.u. |
+| L15 | 0 | — | — |
+| L20 | 0 | — | — |
+| L25 | 2 | 121.586 kW | 0.9507 p.u. |
+| L30 | 4 | 156.509 kW | 0.9514 p.u. |
+
+These counts mean electrically feasible only. All reported thermal statuses were `UNASSESSED`, so the fully verified count was zero.
+
 
 
 \## 6. Automated Testing
@@ -146,7 +174,8 @@ The latest recorded regression run used:
 
 ```powershell
 
-python -c "import opendssdirect; import pytest; raise SystemExit(pytest.main(\['tests/', '-q']))"
+. .\.venv\Scripts\Activate.ps1
+python -c "import opendssdirect; import pytest; raise SystemExit(pytest.main(['tests/', '-q']))"
 
 ```
 
@@ -156,7 +185,7 @@ Recorded outcome:
 
 
 
-\*\*36 tests passed.\*\*
+\*\*62 tests passed in 3.72 seconds on 2026-10-25; runtime varies by environment.\*\*
 
 
 
@@ -208,7 +237,7 @@ The final submission should include the current GUI screenshot and the latest te
 
 
 
-The demonstration confirms that GridResQ can launch its desktop interface, evaluate a bounded set of restoration candidates, and display their electrical characteristics. The latest recorded regression suite passed 36 tests.
+The demonstration confirms that GridResQ can launch its desktop interface, evaluate a bounded set of restoration candidates, and display their electrical characteristics. The latest documented regression suite run passed 62 tests in 3.72 seconds on 2026-10-25; runtime varies by environment.
 
 
 

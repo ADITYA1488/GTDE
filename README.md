@@ -77,17 +77,23 @@ Launch the PySide6 interface:
 python -m dashboard.desktop_app
 ```
 
-The interface supports restoration-scenario evaluation and displays candidate results, including voltage measurements, real-power losses, restored load, thermal status, and rejection information where available.
+The interface supports restoration-scenario evaluation and displays candidate results, including voltage measurements, real-power losses, graph-connected load, thermal status, and rejection information where available. Graph-connected load is the demand at source-connected buses; it does not necessarily represent load served while satisfying voltage constraints.
 
 ## Run the Tests
 
 Run the main regression suite:
 
 ```powershell
+. .\.venv\Scripts\Activate.ps1
+```
+
+Then run:
+
+```powershell
 python -c "import opendssdirect; import pytest; raise SystemExit(pytest.main(['tests/', '-q']))"
 ```
 
-**Latest recorded result:** 36 tests passed.
+**Latest documented suite run (2026-10-25):** 62 tests passed in 3.72 seconds. Runtime varies by environment and is recorded for this run only.
 
 Rerun the suite after making code changes and before producing the final release.
 
@@ -98,6 +104,14 @@ GridResQ includes scripts for evaluating the IEEE 33-bus feeder, restoration sea
 The `results/` directory contains benchmark outputs and experiment data. The `artifacts/` directory is intended for final screenshots and validation evidence.
 
 Reported simulation results should be interpreted in the context of the feeder model, candidate-generation settings, switching-operation limits, and electrical constraints used in each experiment.
+
+### Interpreting Restoration Results
+
+The IEEE 33-bus no-capacitor diagnostic used 3 switching operations, an OpenDSS evaluation budget of 10, and voltage limits of 0.95–1.05 p.u. Its baseline minimum was **0.916109 p.u. at bus 18**. Across 10 candidates each for faults L04, L05, L10, and L20, all 40 converged and passed graph/electrical consistency, but all 40 failed voltage compliance. The planner's **3715 kW** figure is graph-connected load; it does not establish voltage-compliant served load.
+
+The separate `benchmark_ieee33.py` benchmark and dashboard defaults include **900 kVAr of capacitor support at bus 33**. In that experiment, baseline and adaptive each had electrically feasible counts of 0 for L05, 4 for L10, 0 for L15, 0 for L20, 2 for L25, and 4 for L30. The best reported losses/minimum voltages were 113.747 kW/0.9513 p.u. for L10, 121.586 kW/0.9507 p.u. for L25, and 156.509 kW/0.9514 p.u. for L30. These results are a different experiment and must not be combined with the no-capacitor diagnostic. They were not fully verified because thermal status was `UNASSESSED`. The recovery-path comparison changed some retained plans but did not demonstrate improved evaluated electrical outcomes. Thermal compliance remains `UNASSESSED` without verified branch ampacity ratings, so electrical feasibility alone is not full verification.
+
+CSV outputs retain historical columns such as `restored_kw`, `feasible`, and `load_served_kw` for compatibility. New `graph_connected_*`, `electrically_feasible*`, and `fully_verified*` fields make their meaning explicit; legacy fields are not evidence of full verification.
 
 ## Electrical Constraints
 

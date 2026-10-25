@@ -12,6 +12,7 @@ from src.ieee33_electrical_data import (
     SOURCE_BUS,
 )
 from src.ieee33_network import build_ieee33_network
+from src.restoration_reporting import add_combined_benchmark_fields
 
 
 ROOT = Path(__file__).resolve().parent
@@ -24,6 +25,7 @@ VOLTAGE_MAX_PU = 1.05
 EXPECTED_BUSES = 33
 EXPECTED_PHASE_NODES = 99
 LOAD_TOLERANCE_KW = 0.01
+
 
 CAPACITOR_BUSES = [18, 25, 30, 33]
 CAPACITOR_SIZES_KVAR = [150, 300, 450, 600, 900]
@@ -106,18 +108,20 @@ def build_circuit(
     if not dss.Solution.Converged():
         raise RuntimeError("OpenDSS did not converge.")
 
-    # Collect energized phase voltage magnitudes in per unit.
+    # Collect energized phase voltage magnitudes and bus IDs in per unit.
     voltages = []
+    energized_buses = []
 
     for bus in dss.Circuit.AllBusNames():
         dss.Circuit.SetActiveBus(bus)
         values = dss.Bus.puVmagAngle()
 
-        voltages.extend(
-            float(value)
-            for value in values[0::2]
-            if value > 0.01
-        )
+        energized_values = [
+            float(value) for value in values[0::2] if value > 0.01
+        ]
+        if energized_values:
+            energized_buses.append(int(bus.removeprefix("bus")))
+        voltages.extend(energized_values)
 
     if not voltages:
         raise RuntimeError("No energized bus voltages returned.")
@@ -156,6 +160,7 @@ def build_circuit(
         "real_losses_kw": losses[0] / 1000,
         "reactive_losses_kvar": losses[1] / 1000,
         "energized_phase_nodes": len(voltages),
+        "energized_buses": sorted(set(energized_buses)),
         "thermal_status": thermal["thermal_status"],
         "thermal_violation_count": thermal_violation_count,
         "thermal_unassessed_count": thermal_unassessed_count,
@@ -225,14 +230,18 @@ def evaluate_configuration(
         "capacitor_kvar": capacitor_kvar,
         "load_served_kw": round(served_load, 3),
         "load_served_pct": round(load_pct, 3),
+        "graph_connected_load_kw": round(served_load, 3),
+        "graph_connected_load_pct": round(load_pct, 3),
         "supplied_bus_count": len(supplied),
         "topology_valid": not errors,
         "topology_errors": "; ".join(errors),
+        "graph_electrical_consistent": False,
         "powerflow_converged": False,
         "voltage_feasible": False,
 
         # Existing feasibility means topology/load/voltage feasibility.
         "feasible": False,
+        "electrically_feasible": False,
 
         # Thermal compliance is separate from existing feasibility.
         "thermal_status": "UNASSESSED",
@@ -242,6 +251,10 @@ def evaluate_configuration(
         "thermal_branch_details": "",
         "thermal_feasible": None,
         "fully_assessed_feasible": False,
+        "fully_verified": False,
+        "verification_scope": (
+            "topology, load coverage, convergence, voltage; thermal PASS required"
+        ),
 
         "feasibility_notes": "",
     }
@@ -270,6 +283,11 @@ def evaluate_configuration(
         return row
 
     row.update(electrical)
+    graph_buses = sorted(supplied)
+    electrical_buses = sorted(set(electrical.get("energized_buses", [])))
+    row["graph_electrical_consistent"] = (
+        row["powerflow_converged"] and graph_buses == electrical_buses
+    )
     thermal_status = electrical["thermal_status"]
 
     if thermal_status == "VIOLATION":
@@ -278,11 +296,6 @@ def evaluate_configuration(
         row["thermal_feasible"] = True
     else:
         row["thermal_feasible"] = None
-        # Strict feasibility requires verified thermal compliance too.
-        row["fully_assessed_feasible"] = (
-                row["feasible"]
-                and row["thermal_feasible"] is True
-        )
 
     phase_nodes_ok = (
         electrical["energized_phase_nodes"] == EXPECTED_PHASE_NODES
@@ -322,7 +335,7 @@ def evaluate_configuration(
         "; ".join(reasons) if reasons else "OK"
     )
 
-    return row
+    return add_combined_benchmark_fields(row)
 
 
 def diagnostic_score(row, total_load_kw):
@@ -434,7 +447,7 @@ def main():
                     )
                 )
 
-    # Feasible cases first; then rank by measured real losses.
+    # Preserve the existing electrical-feasibility/loss ordering.
     rows.sort(
         key=lambda row: (
             not row["feasible"],
@@ -461,10 +474,11 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
 
-    feasible = [
+    electrically_feasible = [
         row for row in rows
         if row["feasible"]
     ]
+    fully_verified = [row for row in rows if row["fully_verified"]]
 
     diagnostic_candidates = [
         row for row in rows
@@ -475,7 +489,8 @@ def main():
 
     print(f"Network configurations: {len(switch_configurations)}")
     print(f"Scenarios evaluated: {len(rows)}")
-    print(f"Feasible scenarios: {len(feasible)}")
+    print(f"Electrically feasible scenarios: {len(electrically_feasible)}")
+    print(f"Fully verified scenarios: {len(fully_verified)}")
     print(
         f"Voltage limits: "
         f"{VOLTAGE_MIN_PU}-{VOLTAGE_MAX_PU} pu"
@@ -497,13 +512,13 @@ def main():
         f"{base.get('real_losses_kw', float('nan')):.3f} kW"
     )
 
-    if feasible:
+    if electrically_feasible:
         best = min(
-            feasible,
+            electrically_feasible,
             key=lambda row: row["real_losses_kw"],
         )
 
-        print(f"Best feasible scenario: {best['scenario']}")
+        print(f"Best electrically feasible scenario: {best['scenario']}")
         print(
             f"Minimum voltage: "
             f"{best['min_voltage_pu']:.6f} pu"
@@ -517,9 +532,10 @@ def main():
             f"{best['real_losses_kw']:.3f} kW"
         )
         print(
-            f"Load served: "
-            f"{best['load_served_pct']:.3f}%"
+            f"Graph-connected load: "
+            f"{best['graph_connected_load_pct']:.3f}%"
         )
+        print(f"Thermal status: {best['thermal_status']}")
 
     elif diagnostic_candidates:
         best = min(
@@ -542,10 +558,11 @@ def main():
             f"{best['real_losses_kw']:.3f} kW"
         )
         print(
-            f"Load served: "
-            f"{best['load_served_pct']:.3f}%"
+            f"Graph-connected load: "
+            f"{best['graph_connected_load_pct']:.3f}%"
         )
-        print(f"Feasible: {best['feasible']}")
+        print(f"Electrically feasible: {best['electrically_feasible']}")
+        print(f"Fully verified: {best['fully_verified']}")
         print(f"Reason: {best['feasibility_notes']}")
 
     else:
@@ -570,14 +587,14 @@ def main():
 
     fully_assessed = [
         row for row in rows
-        if row.get("fully_assessed_feasible", False)
+        if row.get("fully_verified", False)
     ]
 
     print("\nThermal assessment")
     print(f"Thermal PASS scenarios: {len(thermal_assessed)}")
     print(f"Thermal VIOLATION scenarios: {len(thermal_violations)}")
     print(f"Thermal UNASSESSED scenarios: {len(thermal_unassessed)}")
-    print(f"Fully assessed feasible scenarios: {len(fully_assessed)}")
+    print(f"Fully verified scenarios: {len(fully_assessed)}")
     print(f"Results saved: {output}")
 
 

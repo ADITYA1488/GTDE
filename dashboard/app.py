@@ -7,6 +7,11 @@ import plotly.graph_objects as go
 from src.strategy_comparison import compare_strategies
 from src.ieee33_network import build_ieee33_network
 from src.restoration_powerflow import evaluate_restoration_plans
+from dashboard.verification import (
+    candidate_summary,
+    is_fully_verified,
+    passes_electrical_checks,
+)
 
 
 st.set_page_config(
@@ -328,33 +333,35 @@ if not results:
     st.stop()
 
 
-feasible = [
-    result
-    for result in results
-    if (
-        result.converged
-        and result.voltage_feasible
-        and result.graph_electrical_consistent
-    )
-]
-
-best = feasible[0] if feasible else None
+summary = candidate_summary(results)
+fully_verified = summary["fully_verified"]
+electrically_feasible = summary["electrically_feasible"]
+best = summary["selected"]
 
 st.subheader("Restoration overview")
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 
 c1.metric(
-    "Feasible candidates",
-    f"{len(feasible)} / {len(results)}",
+    "Fully verified candidates",
+    f"{len(fully_verified)} / {len(results)}",
 )
 
 c2.metric(
-    "Restored load",
-    f"{best.plan.restored_kw:,.1f} kW" if best else "None",
+    "Electrical checks pass; thermal UNASSESSED",
+    f"{len(summary['thermal_unassessed'])} / {len(results)}",
 )
 
 c3.metric(
+    "Graph-connected load",
+    f"{best.plan.restored_kw:,.1f} kW" if best else "None",
+)
+st.caption(
+    "Graph-connected load is the demand at source-connected buses; it does not "
+    "necessarily represent voltage-compliant served load."
+)
+
+c4.metric(
     "Minimum voltage",
     (
         f"{best.min_voltage_pu:.4f} pu"
@@ -363,7 +370,7 @@ c3.metric(
     ),
 )
 
-c4.metric(
+c5.metric(
     "Real losses",
     (
         f"{best.real_losses_kw:.3f} kW"
@@ -373,11 +380,23 @@ c4.metric(
 )
 
 if best:
-    st.success(
-        f"Best feasible candidate: close "
-        f"{best.plan.close_ties or 'none'}; open "
-        f"{best.plan.open_branches or 'none'}."
-    )
+    if summary["provisional"]:
+        st.warning(
+            f"Provisional recommendation (electrically feasible): close "
+            f"{best.plan.close_ties or 'none'}; open "
+            f"{best.plan.open_branches or 'none'}. "
+            + (
+                "Thermal compliance is unverified; do not treat this plan as fully validated."
+                if best.thermal_status == "UNASSESSED"
+                else f"Thermal status is {best.thermal_status}; do not treat this plan as fully validated."
+            )
+        )
+    else:
+        st.success(
+            f"Selected fully verified candidate: close "
+            f"{best.plan.close_ties or 'none'}; open "
+            f"{best.plan.open_branches or 'none'}."
+        )
 else:
     st.warning(
         "No candidate passed all current electrical feasibility checks. "
@@ -391,7 +410,7 @@ else:
 
 with st.expander(
     "Electrical feasibility diagnostics",
-    expanded=not bool(feasible),
+    expanded=not bool(electrically_feasible),
 ):
     diagnostic_rows = []
 
@@ -406,6 +425,8 @@ with st.expander(
                 "Converged": result.converged,
                 "Voltage feasible": result.voltage_feasible,
                 "Graph consistent": result.graph_electrical_consistent,
+                "Electrical checks pass": passes_electrical_checks(result),
+                "Fully verified": is_fully_verified(result),
                 "Minimum voltage (pu)": result.min_voltage_pu,
                 "Maximum voltage (pu)": result.max_voltage_pu,
                 "Losses (kW)": result.real_losses_kw,
@@ -423,9 +444,8 @@ with st.expander(
     )
 
     st.caption(
-        "A candidate must converge, satisfy voltage limits, and pass "
-        "the graph/electrical consistency check. Thermal safety remains "
-        "unassessed without verified ampacity ratings."
+        "Electrical checks require convergence, voltage compliance, and graph consistency. "
+        "Full verification additionally requires thermal PASS."
     )
 
 
@@ -459,7 +479,7 @@ with right:
         st.write("**Open branches**")
         st.write(best.plan.open_branches or "No additional openings")
 
-        st.write("**Restoration**")
+        st.write("**Graph-connected restoration**")
         st.write(f"{best.plan.restoration_pct:.2f}%")
 
         st.write("**Maximum voltage**")
@@ -473,7 +493,7 @@ with right:
         st.warning(best.thermal_status)
 
     else:
-        st.write("No electrically feasible candidate was found.")
+        st.write("No candidate passed all electrical checks. No recommendation is available.")
 
 
 # ---------------------------------------------------------
@@ -492,12 +512,14 @@ for index, result in enumerate(results, start=1):
             "Open branches": (
                 ", ".join(result.plan.open_branches) or "—"
             ),
-            "Restored kW": result.plan.restored_kw,
-            "Restoration %": result.plan.restoration_pct,
+            "Graph-connected load (kW)": result.plan.restored_kw,
+            "Graph-connected restoration (%)": result.plan.restoration_pct,
             "Switching operations": result.plan.switching_operations,
             "Converged": result.converged,
             "Voltage feasible": result.voltage_feasible,
             "Graph consistent": result.graph_electrical_consistent,
+            "Electrical checks pass": passes_electrical_checks(result),
+            "Fully verified": is_fully_verified(result),
             "Min voltage pu": result.min_voltage_pu,
             "Max voltage pu": result.max_voltage_pu,
             "Losses kW": result.real_losses_kw,
@@ -516,7 +538,15 @@ st.dataframe(
 
 st.download_button(
     "Download results CSV",
-    data=results_df.to_csv(index=False).encode("utf-8"),
+    data=(
+        results_df.assign(
+            **{
+                # Keep historical CSV fields while adding explicit aliases.
+                "Restored kW": results_df["Graph-connected load (kW)"],
+                "Restoration %": results_df["Graph-connected restoration (%)"],
+            }
+        ).to_csv(index=False).encode("utf-8")
+    ),
     file_name="gtde_restoration_results.csv",
     mime="text/csv",
     width="stretch",

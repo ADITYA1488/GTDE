@@ -160,7 +160,7 @@ Explain how OpenDSS is used to evaluate:
 
 \- Minimum and maximum bus voltage.
 
-\- Restored load.
+\- Graph-connected load.
 
 \- Real-power losses.
 
@@ -244,7 +244,7 @@ Add restoration and strategy-comparison results only after verifying the corresp
 
 
 
-\- Latest recorded regression result: 36 tests passed.
+\- Latest recorded regression result: 62 tests passed in 3.72 seconds on 2026-10-25; runtime varies by environment.
 
 \- Describe the major test categories.
 
@@ -280,7 +280,7 @@ Conclusion:
 
 \- The prototype provides a desktop workflow for analyzing restoration candidates.
 
-\- The recorded regression suite passed 36 tests.
+\- The recorded regression suite passed 62 tests in 3.72 seconds on 2026-10-25; runtime varies by environment.
 
 
 
