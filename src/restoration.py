@@ -22,6 +22,38 @@ class RestorationPlan:
     errors: list = field(default_factory=list)
     estimated_loss_kw: float = 0.0
     score: float = 0.0
+    priority_load_score: float | None = None
+
+
+def _priority_load_score(net, supplied_buses):
+    """Return weighted graph-connected load using optional bus priorities.
+
+    This is a limited implementation of Peng et al. (2024), Sections 2.1.3
+    and 2.2.1 (DOI: 10.3389/fenrg.2024.1460894): critical-load priority is
+    represented with per-bus weights. It does not implement the paper's full
+    weighted load-loss/network-loss objective.
+
+    ``load_priority_weight`` defaults to 1.0, preserving the existing equal-
+    priority behavior when a network has no critical-load metadata. Weighted
+    load is ranked first when explicit metadata changes the served-load value;
+    raw graph-connected kW remains the next criterion and reported metric.
+    """
+    total = 0.0
+    for bus in supplied_buses:
+        data = net.buses[bus]
+        weight = float(data.get("load_priority_weight", 1.0))
+        if not math.isfinite(weight) or weight < 0:
+            raise ValueError(
+                f"Bus {bus!r} load_priority_weight must be finite and non-negative."
+            )
+        total += float(data.get("load_kw", 0.0)) * weight
+    return round(total, 3)
+
+
+def _plan_priority_load_score(plan):
+    """Read the optional score while preserving compatibility with old plans."""
+    score = getattr(plan, "priority_load_score", None)
+    return float(plan.restored_kw if score is None else score)
 
 
 def _recovery_path_context(net, faulted_branches):
@@ -91,7 +123,7 @@ def _recovery_path_context(net, faulted_branches):
 
 
 def _candidate_rank_key(plan, source_paths):
-    """Higher keys are better; path relevance follows load and operations."""
+    """Higher keys are better; weighted service ranks before raw load."""
     closed_ties = set(plan.close_ties)
     opened_branches = set(plan.open_branches)
     path_relevant = plan.valid and any(
@@ -100,6 +132,7 @@ def _candidate_rank_key(plan, source_paths):
         for tie_id, path_branches in source_paths.items()
     )
     return (
+        _plan_priority_load_score(plan),
         plan.restored_kw,
         -plan.switching_operations,
         int(path_relevant),
@@ -268,12 +301,13 @@ def find_restoration_plans(
                     restored = sum(
                         float(net.buses[bus].get("load_kw", 0.0)) for bus in supplied
                     )
+                    priority_load = _priority_load_score(net, supplied)
                     pct = 100.0 * restored / total_load if total_load else 100.0
                     operations = nclose + nopen
 
                     if valid:
-                        # Loss proxy only affects ordering after restored load and
-                        # switching count; calculate it only for graph-valid plans.
+                        # Loss proxy affects only the final ordering tie-break;
+                        # calculate it only for graph-valid plans.
                         proxy = _loss_proxy(net, supplied, adjacency)
                     else:
                         proxy = math.inf
@@ -285,9 +319,10 @@ def find_restoration_plans(
                         switching_operations=operations, supplied_buses=supplied,
                         valid=valid, errors=errors, estimated_loss_kw=proxy,
                         score=round(score, 4),
+                        priority_load_score=priority_load,
                     )
-                    # Path relevance breaks ties only after restored load and
-                    # switching count, and before the existing loss proxy.
+                    # Recovery-path relevance remains a tie-break after
+                    # weighted/raw load and switching count.
                     rank_key = _candidate_rank_key(plan, source_paths)
                     item = (rank_key, serial, plan)
                     serial += 1
@@ -300,9 +335,10 @@ def find_restoration_plans(
     plans.sort(
         key=lambda p: (
             not p.valid,
+            -_plan_priority_load_score(p),
             -p.restored_kw,
             p.switching_operations,
-            -_candidate_rank_key(p, source_paths)[2],
+            -_candidate_rank_key(p, source_paths)[3],
             p.estimated_loss_kw,
         )
     )

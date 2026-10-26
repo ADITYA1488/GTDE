@@ -152,7 +152,7 @@ def test_recovery_path_priority_breaks_only_equal_load_and_operation_ties():
         open_branches=["source_line"],
         valid=True,
     )
-    assert _candidate_rank_key(path_cut, source_paths)[2] == 0
+    assert _candidate_rank_key(path_cut, source_paths)[3] == 0
 
 
 def test_candidates_without_recovery_path_ties_remain_in_search_alternatives():

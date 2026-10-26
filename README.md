@@ -1,180 +1,122 @@
 # GridResQ
-### Graph-Based Distribution Feeder Reconfiguration and Constraint-Aware Outage Restoration
 
-GridResQ is a software prototype for distribution feeder reconfiguration and outage restoration. It combines graph-theoretic switching-plan search with electrical power-flow evaluation to analyze candidate configurations following feeder faults.
+## Graph-Based Distribution Feeder Reconfiguration and Constraint-Aware Outage Restoration
 
-The engine evaluates network topology, restoration potential, voltage constraints, and power losses. It also incorporates branch-current-based thermal analysis, with thermal compliance reported as unassessed when verified conductor ampacity ratings are unavailable.
+GridResQ is a Python research prototype for studying distribution-feeder fault restoration. A feeder fault can disconnect downstream buses even when their lines are not themselves damaged. GridResQ removes the faulted branch from the model, searches for switching plans that reconnect source-disconnected load while preserving radial topology, and evaluates a bounded set of candidate plans with OpenDSS.
 
-## Key Features
+The project supports the IEEE 33-bus test feeder. Its goal is to make restoration candidates and their electrical results inspectable; it is not a utility control system or a validated operating plan.
 
-- **IEEE 33-bus feeder:** Distribution network modeling and benchmark evaluation.
-- **Fault simulation:** Analyze restoration scenarios involving faulted branches.
-- **Graph-based search:** Generate candidate switching plans subject to switching-operation limits.
-- **Topology validation:** Check radiality and graph/electrical consistency.
-- **Power-flow simulation:** Evaluate candidate configurations using OpenDSS through OpenDSSDirect.py.
-- **Voltage constraint checking:** Assess bus voltages against configurable operating limits.
-- **Restoration analysis:** Calculate restored load and evaluate candidate restoration configurations.
-- **Loss evaluation:** Compare real-power losses across candidates.
-- **Adaptive strategy comparison:** Evaluate baseline and adaptive restoration-search approaches.
-- **Capacitor support:** Evaluate configurations incorporating capacitor-based voltage support.
-- **Thermal assessment:** Extract branch currents and compare them with supplied ampacity ratings when available.
-- **Desktop interface:** Explore restoration scenarios and candidate results through a PySide6 GUI.
-- **Automated testing:** Regression tests using pytest.
+## What the application evaluates
 
-## Technology Stack
+For each candidate, GridResQ reports:
 
-| Component | Technology |
-|---|---|
-| Programming language | Python |
-| Graph modeling and algorithms | NetworkX |
-| Power-flow simulation | OpenDSS / OpenDSSDirect.py |
-| Desktop GUI | PySide6 |
-| Testing | pytest |
-| Results and experiment data | CSV |
+- OpenDSS convergence.
+- Minimum and maximum voltage against the configured **0.95–1.05 p.u.** limits.
+- Graph/electrical consistency, by comparing graph-supplied buses with OpenDSS-energized buses.
+- Graph-connected load, switching operations, and real-power losses.
+- Thermal status, which is `UNASSESSED` when verified ampacity ratings are unavailable.
 
-## Project Architecture
+Electrical feasibility requires convergence, voltage compliance, and graph/electrical consistency. **Fully verified** additionally requires thermal status exactly `PASS`. Ranking a candidate does not itself establish feasibility or verification.
 
-GridResQ follows a modular design:
+“Graph-connected load” is the modeled demand at source-connected buses. It does not prove that the load is served while satisfying voltage limits. Do not interpret this quantity as voltage-compliant served load when voltage compliance fails or is unknown.
 
-1. **Network modeling:** Constructs the distribution feeder and represents buses, branches, and switching connections as a graph.
-2. **Fault and candidate generation:** Identifies candidate switching configurations subject to search constraints.
-3. **Topology validation:** Checks whether candidate configurations satisfy the required graph constraints.
-4. **Electrical evaluation:** Uses OpenDSS power flow to evaluate candidate configurations.
-5. **Constraint assessment:** Examines voltage feasibility, graph/electrical consistency, and thermal status.
-6. **Candidate comparison:** Compares restoration outcomes, including restored load and real-power losses.
-7. **Visualization and reporting:** Presents candidate results in the desktop interface and stores benchmark outputs.
+## Architecture and data flow
 
-## Requirements
+1. `src/ieee33_electrical_data.py` holds the feeder bus, load, branch-impedance, source, and tie data. `src/ieee33_network.py` builds the network model used by the planner and visualization.
+2. `src/restoration.py` removes faulted branches from the active graph, identifies disconnected buses, builds BFS recovery paths, generates bounded switching candidates, and checks radial topology.
+3. `src/restoration_powerflow.py` deduplicates candidate topologies, retains a bounded shortlist, evaluates candidates, and compares graph-supplied buses with the buses energized by OpenDSS.
+4. `src/ieee33_powerflow.py` builds and solves the IEEE-33 OpenDSS circuit, then returns convergence, voltage, energized-bus, and real-loss metrics. Thermal analysis can compare extracted branch currents with supplied ratings.
+5. `src/restoration_reporting.py` applies the shared electrical-feasibility and strict full-verification criteria. `src/restoration_objectives.py` supplies the candidate ordering.
+6. `dashboard/app.py` presents the interactive Streamlit demonstration. It uses `dashboard/topology.py` for model-derived plot data and calls the existing evaluator through `dashboard/evaluation_runner.py` and `dashboard/evaluation_worker.py`; it does not implement a second restoration search.
+7. `benchmark_ieee33.py` evaluates six fault locations using baseline and adaptive strategies and writes its CSV to `GRIDRESQ_RESULTS_DIR` (default: `results/`).
 
-- Windows
-- Python 3.12 or a compatible Python version
-- Dependencies listed in `requirements.txt`
+The planner and OpenDSS evaluator are distinct checks: graph connectivity and radiality do not substitute for electrical evaluation.
 
-OpenDSSDirect.py is used for electrical power-flow evaluation. A compatible installation of the declared Python dependencies is required.
+## Requirements and setup
 
-## Installation
-
-Open PowerShell in the project directory.
+The checked repository environment uses Python 3.12.6. Core dependencies are declared in `requirements.txt`: NetworkX, pandas, Plotly, Streamlit, OpenDSSDirect.py, and pytest. On Windows, from the repository root in PowerShell:
 
 ```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-If PowerShell blocks virtual-environment activation, use the Python executable directly:
-
-```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-## Run the Desktop Application
-
-Launch the PySide6 interface:
+To use the optional PySide6 desktop interface, install its dependency separately (it is not listed in `requirements.txt`):
 
 ```powershell
-python -m dashboard.desktop_app
+.\.venv\Scripts\python.exe -m pip install PySide6
+.\.venv\Scripts\python.exe -m dashboard.desktop_app
 ```
 
-The interface supports restoration-scenario evaluation and displays candidate results, including voltage measurements, real-power losses, graph-connected load, thermal status, and rejection information where available. Graph-connected load is the demand at source-connected buses; it does not necessarily represent load served while satisfying voltage constraints.
+## Launch the interactive dashboard
 
-## Run the Tests
-
-Run the main regression suite:
+From the repository root:
 
 ```powershell
-. .\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\python.exe -m streamlit run dashboard/app.py
 ```
 
-Then run:
+Streamlit prints the local URL after startup. In the sidebar, select a supported main-branch fault (the default is L10), choose the network view, and optionally inspect a bus. Set the switching-operation limit, OpenDSS evaluation budget, capacitor support, and search strategy, then click **Run restoration**. Select a candidate to inspect its switching actions and diagnostics. The topology view can show the pre-fault, post-fault, or candidate-restoration state.
+
+Use **Compare both strategies** to run baseline and adaptive evaluation on the same selected fault and budget. The dashboard reports measured differences; identical results are not evidence of adaptive improvement. Use **Download results CSV** to export the current dashboard results. The export is generated in memory and does not overwrite the benchmark CSV.
+
+The default dashboard capacitor setting is **900 kVAr at bus 33**. Disable the checkbox for a no-capacitor run. Keep results from these configurations separate when interpreting them.
+
+## Tests
+
+Run the project regression suite with its virtual environment:
 
 ```powershell
-python -c "import opendssdirect; import pytest; raise SystemExit(pytest.main(['tests/', '-q']))"
+.\.venv\Scripts\python.exe -c "import opendssdirect; import pytest; raise SystemExit(pytest.main(['tests/', '-q']))"
 ```
 
-**Latest documented suite run (2026-10-25):** 62 tests passed in 3.72 seconds. Runtime varies by environment and is recorded for this run only.
+**Latest full suite run (2026-10-26):** 78 tests passed in 5.96 seconds (exit code 0). Duration is specific to that run, not a stable performance metric.
 
-Rerun the suite after making code changes and before producing the final release.
+## IEEE-33 benchmark
 
-## Benchmarking and Results
+The benchmark evaluates faults L05, L10, L15, L20, L25, and L30 with a maximum of three switching operations and an OpenDSS evaluation budget of ten. It compares `baseline` and `adaptive`, with **900 kVAr capacitor support at bus 33**. It reports candidate counts, electrical-feasibility and full-verification counts, graph-connected load, losses, minimum voltage, switching actions, thermal status, and runtime.
 
-GridResQ includes scripts for evaluating the IEEE 33-bus feeder, restoration search, voltage support, and combined optimization.
+The script writes `ieee33_benchmark.csv` into the directory named by `GRIDRESQ_RESULTS_DIR`. Directing output to a fresh temporary directory avoids replacing `results/ieee33_benchmark.csv`:
 
-The `results/` directory contains benchmark outputs and experiment data. The `artifacts/` directory is intended for final screenshots and validation evidence.
-
-Reported simulation results should be interpreted in the context of the feeder model, candidate-generation settings, switching-operation limits, and electrical constraints used in each experiment.
-
-### Interpreting Restoration Results
-
-The IEEE 33-bus no-capacitor diagnostic used 3 switching operations, an OpenDSS evaluation budget of 10, and voltage limits of 0.95–1.05 p.u. Its baseline minimum was **0.916109 p.u. at bus 18**. Across 10 candidates each for faults L04, L05, L10, and L20, all 40 converged and passed graph/electrical consistency, but all 40 failed voltage compliance. The planner's **3715 kW** figure is graph-connected load; it does not establish voltage-compliant served load.
-
-The separate `benchmark_ieee33.py` benchmark and dashboard defaults include **900 kVAr of capacitor support at bus 33**. In that experiment, baseline and adaptive each had electrically feasible counts of 0 for L05, 4 for L10, 0 for L15, 0 for L20, 2 for L25, and 4 for L30. The best reported losses/minimum voltages were 113.747 kW/0.9513 p.u. for L10, 121.586 kW/0.9507 p.u. for L25, and 156.509 kW/0.9514 p.u. for L30. These results are a different experiment and must not be combined with the no-capacitor diagnostic. They were not fully verified because thermal status was `UNASSESSED`. The recovery-path comparison changed some retained plans but did not demonstrate improved evaluated electrical outcomes. Thermal compliance remains `UNASSESSED` without verified branch ampacity ratings, so electrical feasibility alone is not full verification.
-
-CSV outputs retain historical columns such as `restored_kw`, `feasible`, and `load_served_kw` for compatibility. New `graph_connected_*`, `electrically_feasible*`, and `fully_verified*` fields make their meaning explicit; legacy fields are not evidence of full verification.
-
-## Electrical Constraints
-
-The configured voltage limits are **0.95–1.05 per unit**.
-
-Candidate evaluations consider power-flow convergence, voltage compliance, and graph/electrical consistency. A candidate that violates the configured voltage limits must not be described as voltage-feasible.
-
-Lower real-power losses alone do not establish that a candidate is safe or suitable for operation.
-
-## Thermal Assessment and Limitations
-
-GridResQ includes branch-current extraction and thermal-limit checking. However, the current IEEE 33-bus configuration does not contain verified ampacity ratings for every branch.
-
-Consequently, thermal compliance remains **`UNASSESSED`** until appropriate conductor ampacity ratings are supplied. The engine must not claim complete thermal verification in the absence of those ratings.
-
-When verified ratings are available, the thermal assessment can compare calculated branch currents with the corresponding limits.
-
-## Project Structure
-
-```text
-GridResQ/
-├── dashboard/
-│   ├── app.py
-│   └── desktop_app.py
-├── src/
-│   ├── electrical_restoration.py
-│   ├── ieee33_network.py
-│   ├── ieee33_powerflow.py
-│   ├── network.py
-│   ├── restoration.py
-│   ├── restoration_powerflow.py
-│   ├── strategy_comparison.py
-│   ├── thermal_analysis.py
-│   └── thermal_limits.py
-├── tests/
-├── docs/
-├── results/
-├── artifacts/
-├── benchmark_combined_optimization.py
-├── benchmark_ieee33.py
-├── requirements.txt
-├── main.py
-└── README.md
+```powershell
+$env:GRIDRESQ_RESULTS_DIR = Join-Path $env:TEMP 'gridresq_ieee33_release_run'
+.\.venv\Scripts\python.exe benchmark_ieee33.py
 ```
 
-Additional benchmark scripts and archived diagnostic utilities may be present in the repository.
+Choose a new, empty directory name for each run. The script writes to the configured directory and can replace a CSV already there.
 
-## Limitations
+### Validated benchmark observations
 
-- GridResQ is a simulation-based research prototype, not a production distribution-management system.
-- Results depend on the network model, switching constraints, search limits, and power-flow assumptions.
-- Thermal safety cannot be confirmed without verified branch ampacity ratings.
-- The simulation has not been validated on a physical distribution feeder.
-- The software does not replace protection-system coordination, utility operating procedures, or engineering approval.
+The release-pass benchmark used a new temporary output directory. With the 900 kVAr bus-33 configuration, baseline and adaptive produced identical measured outcomes for the six tested faults. Each strategy evaluated ten candidates per fault; electrically feasible counts were 0 for L05, 4 for L10, 0 for L15, 0 for L20, 2 for L25, and 4 for L30. The best electrically feasible loss/minimum-voltage results were 113.747 kW/0.9513 p.u. for L10, 121.586 kW/0.9507 p.u. for L25, and 156.509 kW/0.9514 p.u. for L30. All scenarios had zero fully verified candidates because thermal status was `UNASSESSED`. No adaptive outcome improvement was demonstrated.
 
-## Future Work
+A separate no-capacitor diagnostic used a ten-candidate evaluation budget and three-switching-operation limit. Its baseline minimum voltage was **0.916109 p.u. at bus 18**. Across ten candidates each for L04, L05, L10, and L20, all 40 converged and passed graph/electrical consistency, but all failed voltage compliance. This no-capacitor diagnostic is distinct from the 900 kVAr bus-33 benchmark.
 
-- Integrate verified conductor ampacity ratings.
-- Expand multi-fault restoration validation.
-- Evaluate additional fault scenarios and search budgets.
-- Compare restoration strategies using repeatable benchmark experiments.
-- Validate model assumptions and simulation results against authoritative feeder data.
+## Research-method alignment
 
-## Safety Notice
+The statuses below describe method-level overlap only. They do not indicate a percentage of paper reproduction. GridResQ does not reproduce either paper in full.
 
-GridResQ is intended for research, education, and simulation. Its outputs must not be used as direct switching instructions for a real distribution network without appropriate engineering validation and utility authorization.
+| Paper method | Status | GridResQ implementation and gap |
+|---|---|---|
+| Peng et al. (2024): BFS-based graph traversal | PARTIAL | BFS is used for source-connected outage/recovery-path analysis. The paper uses DFS/BFS for island partitioning and DFS adjustment; GridResQ does not form self-sufficient DG islands. |
+| Peng et al. (2024): critical-load priority, network losses, and switch-operation criteria | PARTIAL | Optional bus priority metadata and bounded candidate ranking exist. GridResQ does not implement the paper’s complete weighted islanding/reconfiguration objective. |
+| Peng et al. (2024): CVaR risk treatment of uncertain distributed generation, including scenario generation/reduction | MISSING | There is no stochastic DER-output model, CVaR objective, Latin-hypercube scenario generation, or K-means scenario reduction. |
+| Peng et al. (2024): distributed-generation island power balance | MISSING | The current feeder has a single modeled source and no dispatchable DG island model. |
+| Peng et al. (2024): branch ampacity constraint | PARTIAL | `src/thermal_limits.py` can compare measured current with supplied ratings, but authoritative ratings are not configured for this feeder; thermal results remain `UNASSESSED`. |
+| Peng et al. (2024) and Chen et al. (2025): radial topology and switching constraints | PARTIAL | GridResQ checks radiality and bounds switching operations, but uses its own bounded graph search rather than either paper’s optimization formulation. |
+| Chen et al. (2025): topology reconfiguration with linearized DistFlow power-flow constraints | PARTIAL | GridResQ evaluates candidates using OpenDSS and voltage limits. It does not implement the paper’s linearized DistFlow optimization model. |
+| Chen et al. (2025): DER scheduling, load-shedding optimization, multiple networked microgrids, and fairness cases | MISSING | These resources, schedules, and operating scenarios are not modeled in this single-source IEEE-33 prototype. |
+| Chen et al. (2025): hardware-in-the-loop validation | MISSING | No HIL equipment, controller integration, or real-time HIL experiment is included. |
+
+The bounded tie-switch search, graph/electrical bus-set consistency check, OpenDSS evaluation pipeline, and interactive dashboard are GridResQ design choices; their presence alone does not constitute implementation of a paper’s full method.
+
+References: [Peng et al. (2024), DOI 10.3389/fenrg.2024.1460894](https://www.frontiersin.org/journals/energy-research/articles/10.3389/fenrg.2024.1460894/full); [Chen et al. (2025), DOI 10.1109/ACCESS.2025.3527329](https://doi.org/10.1109/ACCESS.2025.3527329).
+
+## Limitations and interpretation
+
+- Thermal compliance is **`UNASSESSED`** because authoritative ampacity ratings are unavailable. OpenDSS branch-current measurements alone do not establish thermal compliance. Verified ampacity values and a documented mapping to every modeled branch/tie are required before this check can report `PASS`.
+- A candidate with voltage violations is not electrically feasible even if the planner reports all graph-connected load.
+- The benchmark comparison did not demonstrate better evaluated outcomes for the adaptive strategy.
+- Search is bounded and tests a limited candidate set; results depend on the modeled feeder, switching limits, candidate budget, and OpenDSS configuration.
+- The comparison with Peng et al. and Chen et al. is methodological context, not exact reproduction. There is no physical feeder validation or hardware-in-the-loop validation.
+- GridResQ is a simulation-based research prototype. Its outputs are not direct switching instructions and do not replace protection coordination, utility procedures, or engineering approval.

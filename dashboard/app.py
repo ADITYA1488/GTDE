@@ -2,25 +2,31 @@
 
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
+import plotly.express as px
 
-from src.strategy_comparison import compare_strategies
 from src.ieee33_network import build_ieee33_network
-from src.restoration_powerflow import evaluate_restoration_plans
+from dashboard.evaluation_runner import (
+    compare_restoration_strategies,
+    evaluate_restoration,
+)
 from dashboard.verification import (
     candidate_summary,
     is_fully_verified,
     passes_electrical_checks,
 )
+from dashboard.topology import (
+    VIEWS, build_feeder_figure, candidate_label, select_candidate,
+    supported_faults,
+)
 
 
 st.set_page_config(
-    page_title="GTDE | Feeder Restoration",
+    page_title="GridResQ | Feeder Restoration",
     page_icon="⚡",
     layout="wide",
 )
 
-st.title("⚡ GTDE — Feeder Restoration Engine")
+st.title("⚡ GridResQ — Feeder Restoration")
 st.caption(
     "IEEE 33-bus | Graph-based FLISR | OpenDSS electrical validation"
 )
@@ -29,182 +35,6 @@ st.caption(
 @st.cache_resource
 def load_network():
     return build_ieee33_network()
-
-
-def get_value(obj, *names, default=None):
-    """Read a value from an object or dictionary."""
-    for name in names:
-        if isinstance(obj, dict) and name in obj:
-            return obj[name]
-        if hasattr(obj, name):
-            return getattr(obj, name)
-    return default
-
-
-def draw_network(net, result=None, fault=None):
-    """Draw a schematic of the IEEE 33-bus feeder."""
-
-    fig = go.Figure()
-
-    endpoints = {}
-
-    for i in range(1, 18):
-        endpoints[f"L{i:02d}"] = (i, i + 1)
-
-    for i, (u, v) in enumerate(
-        [(2, 19), (19, 20), (20, 21), (21, 22)],
-        start=18,
-    ):
-        endpoints[f"L{i:02d}"] = (u, v)
-
-    for i, (u, v) in enumerate(
-        [(3, 23), (23, 24), (24, 25)],
-        start=22,
-    ):
-        endpoints[f"L{i:02d}"] = (u, v)
-
-    for i, (u, v) in enumerate(
-        [
-            (6, 26),
-            (26, 27),
-            (27, 28),
-            (28, 29),
-            (29, 30),
-            (30, 31),
-            (31, 32),
-            (32, 33),
-        ],
-        start=25,
-    ):
-        endpoints[f"L{i:02d}"] = (u, v)
-
-    endpoints.update(
-        {
-            "T33": (8, 21),
-            "T34": (9, 15),
-            "T35": (12, 22),
-            "T36": (18, 33),
-            "T37": (25, 29),
-        }
-    )
-
-    positions = {}
-
-    for bus in range(1, 19):
-        positions[bus] = (bus - 1, 3)
-
-    for bus in range(19, 23):
-        positions[bus] = (bus - 18, 2)
-
-    for bus in range(23, 26):
-        positions[bus] = (bus - 22, 1)
-
-    for bus in range(26, 34):
-        positions[bus] = (bus - 25, 0)
-
-    for branch in getattr(net, "branches", []):
-        branch_id = str(
-            get_value(branch, "branch_id", "id", default="?")
-        )
-
-        u = get_value(
-            branch,
-            "from_bus",
-            "source_bus",
-            "u",
-            "bus1",
-            "from_node",
-        )
-        v = get_value(
-            branch,
-            "to_bus",
-            "target_bus",
-            "v",
-            "bus2",
-            "to_node",
-        )
-
-        try:
-            u, v = int(u), int(v)
-        except (TypeError, ValueError):
-            u, v = endpoints.get(branch_id, (None, None))
-
-        if u not in positions or v not in positions:
-            u, v = endpoints.get(branch_id, (None, None))
-
-        if u not in positions or v not in positions:
-            continue
-
-        normally_closed = get_value(
-            branch, "normally_closed", default=True
-        )
-
-        color = "#64748b" if normally_closed else "#2563eb"
-        width = 2 if normally_closed else 1.8
-        dash = "solid" if normally_closed else "dash"
-
-        if branch_id == str(fault):
-            color, width, dash = "#dc2626", 4, "solid"
-        elif result is not None:
-            if branch_id in result.plan.close_ties:
-                color, width, dash = "#16a34a", 3.5, "solid"
-            elif branch_id in result.plan.open_branches:
-                color, width, dash = "#d97706", 3.5, "dash"
-
-        x1, y1 = positions[u]
-        x2, y2 = positions[v]
-
-        fig.add_trace(
-            go.Scatter(
-                x=[x1, x2],
-                y=[y1, y2],
-                mode="lines",
-                line=dict(color=color, width=width, dash=dash),
-                hovertemplate=(
-                    f"{branch_id}: Bus {u} — Bus {v}<extra></extra>"
-                ),
-                showlegend=False,
-            )
-        )
-
-    bus_ids = sorted(positions)
-
-    fig.add_trace(
-        go.Scatter(
-            x=[positions[bus][0] for bus in bus_ids],
-            y=[positions[bus][1] for bus in bus_ids],
-            mode="markers+text",
-            text=[str(bus) for bus in bus_ids],
-            textposition="top center",
-            textfont=dict(size=10, color="#1f2937"),
-            marker=dict(
-                size=10,
-                color=[
-                    "#dc2626" if bus == 1 else "#0f766e"
-                    for bus in bus_ids
-                ],
-                line=dict(width=1, color="white"),
-            ),
-            hovertemplate="Bus %{text}<extra></extra>",
-            showlegend=False,
-        )
-    )
-
-    fig.update_layout(
-        height=470,
-        margin=dict(l=20, r=20, t=20, b=20),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        showlegend=False,
-        xaxis=dict(visible=False),
-        yaxis=dict(
-            visible=False,
-            scaleanchor="x",
-            scaleratio=1,
-        ),
-    )
-
-    return fig
 
 
 # ---------------------------------------------------------
@@ -222,10 +52,19 @@ with st.sidebar:
         if branch.normally_closed
     ]
 
+    fault_options = supported_faults(net)
     fault = st.selectbox(
-        "Faulted main branch",
-        branch_ids,
-        index=branch_ids.index("L10") if "L10" in branch_ids else 0,
+        "Fault scenario (main branch)", fault_options,
+        index=fault_options.index("L10") if "L10" in fault_options else 0,
+    )
+
+    topology_view = st.selectbox("Network state", VIEWS, index=0)
+    selected_bus = st.selectbox("Inspect bus", sorted(net.buses), index=0)
+    bus_info = net.buses[selected_bus]
+    st.caption(
+        f"{bus_info.get('name', f'Bus {selected_bus}')} · "
+        f"{float(bus_info.get('load_kw', 0)):.1f} kW demand · "
+        f"priority weight {bus_info.get('load_priority_weight', 1.0)}"
     )
 
     strategy = st.selectbox(
@@ -255,12 +94,21 @@ with st.sidebar:
 
     capacitor_bus = 33 if capacitor_enabled else None
     capacitor_kvar = 900 if capacitor_enabled else 0
+    st.caption(
+        f"Capacitor configuration: {capacitor_kvar} kVAr"
+        + (f" at bus {capacitor_bus}" if capacitor_bus is not None else " (disabled)")
+    )
 
     run = st.button(
         "Run restoration",
         type="primary",
         width="stretch",
     )
+
+run_signature = (
+    fault, strategy, max_operations, evaluation_budget,
+    capacitor_bus, capacitor_kvar,
+)
 
 
 # ---------------------------------------------------------
@@ -274,25 +122,12 @@ if run:
     progress = st.progress(0)
     status = st.empty()
 
-    def report_progress(completed, total, result):
-        if total <= 0:
-            status.write("No graph-valid candidates to evaluate.")
-            return
-
-        progress.progress(min(completed / total, 1.0))
-
-        if result is None:
-            status.write("Preparing restoration candidates...")
-            return
-
-        status.write(
-            f"OpenDSS evaluations: {completed}/{total} · "
-            f"Converged: {result.converged}"
-        )
-
     try:
-        results = evaluate_restoration_plans(
-            net,
+        status.write(
+            "Generating graph-valid plans and running the bounded OpenDSS "
+            "evaluation in an isolated worker..."
+        )
+        results = evaluate_restoration(
             faulted_branches={fault},
             max_operations=max_operations,
             max_results=10,
@@ -300,12 +135,12 @@ if run:
             capacitor_kvar=capacitor_kvar,
             max_electrical_evaluations=evaluation_budget,
             strategy=strategy,
-            progress_callback=report_progress,
         )
 
         st.session_state["gtde_results"] = results
         st.session_state["gtde_fault"] = fault
         st.session_state["gtde_strategy"] = strategy
+        st.session_state["gtde_signature"] = run_signature
 
         progress.progress(1.0)
         status.success(
@@ -323,15 +158,27 @@ if run:
 
 results = st.session_state.get("gtde_results", [])
 active_fault = st.session_state.get("gtde_fault", fault)
+if st.session_state.get("gtde_signature") != run_signature:
+    results = []
 
 if not results:
     st.info("Choose simulation settings and click Run restoration.")
-    st.plotly_chart(
-        draw_network(net, fault=active_fault),
-        width="stretch",
-    )
+    st.plotly_chart(build_feeder_figure(
+        net, faulted_branches={fault}, view=topology_view,
+        selected_bus=selected_bus,
+    ), width="stretch")
+    current_state = "pre-fault" if topology_view == "Pre-fault" else "post-fault"
+    st.caption(f"Showing {current_state} topology. Grey buses are disconnected in this state; select a bus in the sidebar to inspect demand.")
     st.stop()
 
+
+candidate_index = st.selectbox(
+    "Candidate plan",
+    options=range(len(results)),
+    format_func=lambda index: candidate_label(index, results[index]),
+    key="gtde_candidate_index",
+)
+selected_candidate = select_candidate(results, candidate_index)
 
 summary = candidate_summary(results)
 fully_verified = summary["fully_verified"]
@@ -353,8 +200,8 @@ c2.metric(
 )
 
 c3.metric(
-    "Graph-connected load",
-    f"{best.plan.restored_kw:,.1f} kW" if best else "None",
+    "Selected candidate graph-connected load",
+    f"{selected_candidate.plan.restored_kw:,.1f} kW",
 )
 st.caption(
     "Graph-connected load is the demand at source-connected buses; it does not "
@@ -362,19 +209,19 @@ st.caption(
 )
 
 c4.metric(
-    "Minimum voltage",
+    "Selected candidate minimum voltage",
     (
-        f"{best.min_voltage_pu:.4f} pu"
-        if best and best.min_voltage_pu is not None
+        f"{selected_candidate.min_voltage_pu:.4f} pu"
+        if selected_candidate.min_voltage_pu is not None
         else "—"
     ),
 )
 
 c5.metric(
-    "Real losses",
+    "Selected candidate real losses",
     (
-        f"{best.real_losses_kw:.3f} kW"
-        if best and best.real_losses_kw is not None
+        f"{selected_candidate.real_losses_kw:.3f} kW"
+        if selected_candidate.real_losses_kw is not None
         else "—"
     ),
 )
@@ -458,19 +305,39 @@ left, right = st.columns([1.4, 1])
 with left:
     st.subheader("Feeder topology")
 
-    st.plotly_chart(
-        draw_network(net, result=best, fault=active_fault),
-        width="stretch",
-    )
+    st.plotly_chart(build_feeder_figure(
+        net, faulted_branches={active_fault}, plan=selected_candidate.plan,
+        view=topology_view, selected_bus=selected_bus,
+    ), width="stretch")
 
     st.caption(
-        "Schematic only. Green = selected tie closures; orange = "
-        "selected openings; red = faulted branch; blue dashed = "
-        "normally open ties."
+        "Topology comes from the network model. Purple = candidate recovery path; "
+        "green = candidate tie closure; orange = candidate opening; red = fault; "
+        "blue dashed = normally open tie; grey buses = source-disconnected. "
+        f"Voltage feasibility uses 0.95–1.05 p.u. Current view: {topology_view}."
     )
 
 with right:
     st.subheader("Switching decision")
+
+    if selected_candidate:
+        st.write(f"**Candidate {candidate_index + 1} diagnostics**")
+        st.write(f"Converged: {selected_candidate.converged}")
+        st.write(f"Voltage compliant: {selected_candidate.voltage_feasible}")
+        st.write(f"Graph/electrical consistent: {selected_candidate.graph_electrical_consistent}")
+        st.write(f"Minimum voltage: {selected_candidate.min_voltage_pu:.4f} p.u." if selected_candidate.min_voltage_pu is not None else "Minimum voltage: unavailable")
+        st.write(f"Maximum voltage: {selected_candidate.max_voltage_pu:.4f} p.u." if selected_candidate.max_voltage_pu is not None else "Maximum voltage: unavailable")
+        st.write(f"Real losses: {selected_candidate.real_losses_kw:.3f} kW" if selected_candidate.real_losses_kw is not None else "Real losses: unavailable")
+        st.write(f"Thermal status: {selected_candidate.thermal_status}")
+        st.write(f"Fully verified: {is_fully_verified(selected_candidate)}")
+        st.write(f"Graph-connected load: {selected_candidate.plan.restored_kw:.1f} kW")
+        st.write(f"Switching operations: {selected_candidate.plan.switching_operations}")
+        st.write("**Switching operations**")
+        st.write(f"Close: {selected_candidate.plan.close_ties or 'none'} · Open: {selected_candidate.plan.open_branches or 'none'}")
+        if not passes_electrical_checks(selected_candidate):
+            st.warning("This candidate fails at least one electrical check and is not an eligible recommendation.")
+    else:
+        st.write("No evaluated candidate is selected.")
 
     if best:
         st.write("**Close ties**")
@@ -529,6 +396,14 @@ for index, result in enumerate(results, start=1):
     )
 
 results_df = pd.DataFrame(rows)
+export_df = results_df.assign(
+    **{
+        "Fault scenario": active_fault,
+        "Search strategy": st.session_state.get("gtde_strategy", strategy),
+        "Capacitor bus": capacitor_bus,
+        "Capacitor kVAr": capacitor_kvar,
+    }
+)
 
 st.dataframe(
     results_df,
@@ -539,7 +414,7 @@ st.dataframe(
 st.download_button(
     "Download results CSV",
     data=(
-        results_df.assign(
+        export_df.assign(
             **{
                 # Keep historical CSV fields while adding explicit aliases.
                 "Restored kW": results_df["Graph-connected load (kW)"],
@@ -558,6 +433,18 @@ st.caption(
     "switching plans before any real-world operation."
 )
 
+st.subheader("Candidate outcome comparison")
+if not results_df.empty:
+    chart_df = results_df[["Rank", "Graph-connected load (kW)", "Min voltage pu", "Max voltage pu", "Losses kW"]].melt(
+        id_vars="Rank", var_name="Metric", value_name="Value"
+    )
+    st.plotly_chart(
+        px.bar(
+            chart_df, x="Rank", y="Value", color="Metric", barmode="group",
+            facet_row="Metric", height=560,
+        ), width="stretch",
+    )
+
 
 # ---------------------------------------------------------
 # Baseline versus adaptive comparison
@@ -575,8 +462,7 @@ if st.button("Compare both strategies", width="stretch"):
             "Running baseline and adaptive comparisons..."
         )
 
-        comparison = compare_strategies(
-            net,
+        comparison = compare_restoration_strategies(
             faulted_branches={active_fault},
             max_operations=max_operations,
             evaluation_budget=evaluation_budget,
@@ -593,6 +479,37 @@ if st.button("Compare both strategies", width="stretch"):
             comparison_df,
             width="stretch",
             hide_index=True,
+        )
+
+        outcome_columns = [
+            "Candidates returned", "Electrically feasible candidates",
+            "Fully verified candidates", "Best graph-connected load (kW)",
+            "Graph-connected restoration (%)", "Minimum voltage (pu)",
+            "Real losses (kW)", "Switching operations", "Thermal status",
+        ]
+        baseline_row = comparison_df.loc[comparison_df["Strategy"] == "baseline"].iloc[0]
+        adaptive_row = comparison_df.loc[comparison_df["Strategy"] == "adaptive"].iloc[0]
+        equal_outcomes = all(
+            baseline_row[column] == adaptive_row[column]
+            for column in outcome_columns
+        )
+        if equal_outcomes:
+            st.info("Baseline and adaptive produced the same measured outcomes for this scenario and budget. Runtime is reported separately and is not an outcome improvement claim.")
+        else:
+            st.info("Baseline and adaptive differ on the measured outcomes shown below. These are scenario-specific results, not a general performance guarantee.")
+
+        chart_columns = [
+            "Electrically feasible candidates", "Fully verified candidates",
+            "Best graph-connected load (kW)", "Minimum voltage (pu)",
+            "Real losses (kW)", "Runtime (s)",
+        ]
+        comparison_chart = comparison_df.melt(
+            id_vars="Strategy", value_vars=chart_columns,
+            var_name="Measured metric", value_name="Value",
+        )
+        st.plotly_chart(
+            px.bar(comparison_chart, x="Strategy", y="Value", color="Strategy", facet_row="Measured metric", height=680),
+            width="stretch",
         )
 
         st.download_button(
