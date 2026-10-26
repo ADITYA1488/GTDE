@@ -52,7 +52,8 @@ Run the main regression suite from the project root:
 
 ```powershell
 
-python -c "import opendssdirect; import pytest; raise SystemExit(pytest.main(\['tests/', '-q']))"
+. .\.venv\Scripts\Activate.ps1
+python -c "import opendssdirect; import pytest; raise SystemExit(pytest.main(['tests/', '-q']))"
 
 ```
 
@@ -70,7 +71,7 @@ The latest recorded regression run completed with:
 
 
 
-\*\*36 passed in 2.15 seconds.\*\*
+\*\*62 passed in 3.72 seconds on 2026-10-25; runtime varies by environment.\*\*
 
 
 
@@ -266,7 +267,7 @@ Update this section after the final code changes.
 
 
 
-\- Latest recorded automated tests: 36 passed.
+\- Latest recorded automated tests: 62 passed in 3.72 seconds on 2026-10-25; runtime varies by environment.
 
 \- Desktop application: previously launched successfully.
 

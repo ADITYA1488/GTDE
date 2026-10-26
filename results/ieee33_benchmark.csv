@@ -1,13 +1,13 @@
-fault,strategy,evaluated,feasible,restored_kw,restoration_pct,actual_losses_kw,min_voltage_pu,closed_ties,opened_branches,thermal_status,runtime_seconds,error
-L05,baseline,10,0,,,,,,,UNASSESSED,1.124,
-L05,adaptive,10,0,,,,,,,UNASSESSED,1.101,
-L10,baseline,10,4,3715.0,100.0,113.74706492107879,0.9512872818313187,T35;T37,L28,UNASSESSED,1.143,
-L10,adaptive,10,4,3715.0,100.0,113.74706492107879,0.9512872818313187,T35;T37,L28,UNASSESSED,1.274,
-L15,baseline,10,0,,,,,,,UNASSESSED,1.201,
-L15,adaptive,10,0,,,,,,,UNASSESSED,1.427,
-L20,baseline,10,0,,,,,,,UNASSESSED,1.249,
-L20,adaptive,10,0,,,,,,,UNASSESSED,1.261,
-L25,baseline,10,2,3715.0,100.0,121.58601637981809,0.9507443670535946,T35;T37,L11,UNASSESSED,1.104,
-L25,adaptive,10,2,3715.0,100.0,121.58601637981809,0.9507443670535946,T35;T37,L11,UNASSESSED,1.155,
-L30,baseline,10,4,3715.0,100.0,156.50917669263862,0.9514172808938859,T35;T36,L10,UNASSESSED,1.219,
-L30,adaptive,10,4,3715.0,100.0,156.50917669263862,0.9514172808938859,T35;T36,L10,UNASSESSED,1.217,
+fault,strategy,evaluated,feasible,restored_kw,restoration_pct,actual_losses_kw,min_voltage_pu,closed_ties,opened_branches,thermal_status,runtime_seconds,error,electrically_feasible_candidates,feasibility_scope,fully_verified_candidates,graph_connected_load_kw,graph_connected_restoration_pct,verification_scope,capacitor_bus,capacitor_kvar
+L05,baseline,10,0,,,,,,,UNASSESSED,0.449,,0,electrical checks; thermal may be UNASSESSED,0,,,"convergence, voltage, graph consistency, thermal PASS",33,900
+L05,adaptive,10,0,,,,,,,UNASSESSED,0.516,,0,electrical checks; thermal may be UNASSESSED,0,,,"convergence, voltage, graph consistency, thermal PASS",33,900
+L10,baseline,10,4,3715.0,100.0,113.74706492107879,0.9512872818313187,T35;T37,L28,UNASSESSED,0.546,,4,electrical checks; thermal may be UNASSESSED,0,3715.0,100.0,"convergence, voltage, graph consistency, thermal PASS",33,900
+L10,adaptive,10,4,3715.0,100.0,113.74706492107879,0.9512872818313187,T35;T37,L28,UNASSESSED,0.551,,4,electrical checks; thermal may be UNASSESSED,0,3715.0,100.0,"convergence, voltage, graph consistency, thermal PASS",33,900
+L15,baseline,10,0,,,,,,,UNASSESSED,0.566,,0,electrical checks; thermal may be UNASSESSED,0,,,"convergence, voltage, graph consistency, thermal PASS",33,900
+L15,adaptive,10,0,,,,,,,UNASSESSED,0.587,,0,electrical checks; thermal may be UNASSESSED,0,,,"convergence, voltage, graph consistency, thermal PASS",33,900
+L20,baseline,10,0,,,,,,,UNASSESSED,0.533,,0,electrical checks; thermal may be UNASSESSED,0,,,"convergence, voltage, graph consistency, thermal PASS",33,900
+L20,adaptive,10,0,,,,,,,UNASSESSED,0.528,,0,electrical checks; thermal may be UNASSESSED,0,,,"convergence, voltage, graph consistency, thermal PASS",33,900
+L25,baseline,10,2,3715.0,100.0,121.58601637981809,0.9507443670535946,T35;T37,L11,UNASSESSED,0.556,,2,electrical checks; thermal may be UNASSESSED,0,3715.0,100.0,"convergence, voltage, graph consistency, thermal PASS",33,900
+L25,adaptive,10,2,3715.0,100.0,121.58601637981809,0.9507443670535946,T35;T37,L11,UNASSESSED,0.502,,2,electrical checks; thermal may be UNASSESSED,0,3715.0,100.0,"convergence, voltage, graph consistency, thermal PASS",33,900
+L30,baseline,10,4,3715.0,100.0,156.50917669263862,0.9514172808938859,T35;T36,L10,UNASSESSED,0.515,,4,electrical checks; thermal may be UNASSESSED,0,3715.0,100.0,"convergence, voltage, graph consistency, thermal PASS",33,900
+L30,adaptive,10,4,3715.0,100.0,156.50917669263862,0.9514172808938859,T35;T36,L10,UNASSESSED,0.531,,4,electrical checks; thermal may be UNASSESSED,0,3715.0,100.0,"convergence, voltage, graph consistency, thermal PASS",33,900

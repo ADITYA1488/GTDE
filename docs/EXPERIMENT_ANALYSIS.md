@@ -8,12 +8,12 @@ synthetic six-bus distribution feeder.
 - Total modeled load: 540 kW
 - Maximum switching operations: 3
 - Search results evaluated electrically: 244 candidates
-- Candidates passing the current feasibility filters: 32
-- Fault scenarios with feasible candidates: L23, L34, L45, L56
+- Candidates passing the current electrical/topology screening filters: 32
+- Fault scenarios with electrically feasible candidates: L23, L34, L45, L56
 
 ## Feasibility filters
 
-Candidates are classified as feasible when:
+Candidates are classified as electrically feasible in this report when:
 
 1. OpenDSS converges.
 2. Minimum bus voltage is at least 0.95 pu.
@@ -24,6 +24,10 @@ Candidates are classified as feasible when:
 
 These filters are prototype screening criteria, not complete grid
 operational or safety constraints.
+
+The reported restoration percentage and load refer to graph-connected
+modeled load. Thermal compliance was not assessed in this experiment;
+these results are not fully verified candidates.
 
 ## Results
 

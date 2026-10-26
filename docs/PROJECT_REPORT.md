@@ -10,7 +10,7 @@ GridResQ is a software-based prototype for analyzing distribution feeder reconfi
 
 
 
-The prototype is evaluated using an IEEE 33-bus distribution feeder model. The regression suite contains 36 passing tests in the latest recorded validation. Thermal analysis is implemented, but thermal compliance remains unassessed until verified branch ampacity ratings are provided. The project demonstrates a simulation-based workflow for candidate restoration analysis rather than a production-ready utility control system.
+The prototype is evaluated using an IEEE 33-bus distribution feeder model. The latest documented regression suite run passed 62 tests in 3.72 seconds on 2026-10-25; runtime varies by environment. Thermal analysis is implemented, but thermal compliance remains unassessed until verified branch ampacity ratings are provided. The project demonstrates a simulation-based workflow for candidate restoration analysis rather than a production-ready utility control system.
 
 
 
@@ -234,7 +234,7 @@ A candidate violating these limits must not be classified as voltage-feasible.
 
 
 
-Restored load measures the demand supplied by the evaluated configuration, according to the network model and restoration-evaluation logic.
+The restoration planner's load figure measures demand at source-connected buses in the graph model. It is graph-connected or topologically restored load, not proof that the demand is served while meeting OpenDSS voltage constraints. A candidate that fails voltage compliance must not be described as voltage-feasible, and thermal `UNASSESSED` prevents full verification.
 
 
 
@@ -318,6 +318,8 @@ The baseline power-flow validation previously recorded the following results:
 
 These values describe the recorded baseline configuration, not a restored configuration. The minimum baseline voltage is below the configured 0.95 p.u. lower limit.
 
+The baseline and controlled voltage diagnostic used no capacitor support. The separate desktop demonstration and IEEE 33-bus benchmark use 900 kvar capacitor support at bus 33 by default; those configurations and results are distinct. In the no-capacitor diagnostic, all 10 candidates for each of L04, L05, L10, and L20 converged and were graph/electrically consistent, but all 40 failed voltage compliance. Their 3715 kW figure denotes graph-connected load. In the separate capacitor-supported benchmark, baseline and adaptive each found 0 electrically feasible candidates for L05, L15, and L20; 4 for L10; 2 for L25; and 4 for L30. Thermal compliance was unassessed, so none of these candidates was fully verified. The recovery-path priority changed some retained plans but did not improve evaluated outcomes.
+
 
 
 The desktop application has also demonstrated candidate evaluation for a selected branch-fault scenario. In the recorded screenshot, ten candidates were evaluated, but zero satisfied all current full-verification requirements because thermal compliance remained unassessed.
@@ -338,7 +340,8 @@ The latest recorded regression run used:
 
 ```powershell
 
-python -c "import opendssdirect; import pytest; raise SystemExit(pytest.main(\['tests/', '-q']))"
+. .\.venv\Scripts\Activate.ps1
+python -c "import opendssdirect; import pytest; raise SystemExit(pytest.main(['tests/', '-q']))"
 
 ```
 
@@ -348,7 +351,7 @@ Recorded result:
 
 
 
-\*\*36 tests passed.\*\*
+\*\*62 tests passed in 3.72 seconds on 2026-10-25; runtime varies by environment.\*\*
 
 
 
@@ -414,7 +417,7 @@ GridResQ demonstrates a modular software workflow for graph-based distribution f
 
 
 
-The latest recorded regression suite passed 36 tests. However, thermal compliance remains unassessed because verified branch ampacity ratings have not been supplied for every branch. The prototype is therefore suitable for research and educational simulation, with further validation required before any real-world operational use.
+The latest documented regression suite run passed 62 tests in 3.72 seconds on 2026-10-25; runtime varies by environment. However, thermal compliance remains unassessed because verified branch ampacity ratings have not been supplied for every branch. The prototype is therefore suitable for research and educational simulation, with further validation required before any real-world operational use.
 
 
 

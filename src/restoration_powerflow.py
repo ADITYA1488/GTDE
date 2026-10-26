@@ -1,8 +1,12 @@
 """Bounded graph-based restoration search with OpenDSS validation."""
 from dataclasses import dataclass
 from typing import Callable
-
-from src.restoration import find_restoration_plans
+from src.restoration_objectives import restoration_rank
+from src.restoration_reporting import passes_electrical_checks
+from src.restoration import (
+    _plan_priority_load_score,
+    find_restoration_plans,
+)
 from src.ieee33_powerflow import evaluate_ieee33_configuration
 
 
@@ -116,6 +120,7 @@ def evaluate_restoration_plans(
     if plans:
         plans.sort(
             key=lambda p: (
+                -_plan_priority_load_score(p),
                 -p.restored_kw,
                 p.switching_operations,
                 p.estimated_loss_kw,
@@ -131,6 +136,7 @@ def evaluate_restoration_plans(
         group_keys = sorted(
             groups,
             key=lambda key: (
+                -max(_plan_priority_load_score(p) for p in groups[key]),
                 -max(p.restored_kw for p in groups[key]),
                 min(p.switching_operations for p in groups[key]),
                 min(p.estimated_loss_kw for p in groups[key]),
@@ -195,6 +201,12 @@ def evaluate_restoration_plans(
             thermal_status = electrical.get("thermal_status", "UNASSESSED")
             if thermal_status == "VIOLATION":
                 reasons.append("Branch ampacity limit violated.")
+            elif thermal_status == "UNASSESSED":
+                reasons.append("Thermal limits unverified.")
+            elif thermal_status != "PASS":
+                reasons.append(
+                    f"Thermal status {thermal_status!r}; verified PASS not established."
+                )
             result = ElectricalRestorationResult(
                 plan=plan, converged=converged, voltage_feasible=voltage_feasible,
                 min_voltage_pu=electrical.get("min_voltage_pu"),
@@ -207,14 +219,6 @@ def evaluate_restoration_plans(
                 electrically_energized_buses=electrical_buses,
                 solver_diagnostic=electrical.get("solver_diagnostic"),
             )
-            if not electrical["converged"]:
-                reason = "Power flow did not converge."
-            elif not electrical["voltage_feasible"]:
-                reason = "Voltage limits violated."
-            elif electrical["thermal_status"] == "VIOLATION":
-                reason = "Branch ampacity limit violated."
-            elif electrical["thermal_status"] == "UNASSESSED":
-                reason = "Thermal limits unverified."
         except Exception as exc:
             result = ElectricalRestorationResult(
                 plan=plan, converged=False, voltage_feasible=False,
@@ -236,7 +240,12 @@ def evaluate_restoration_plans(
         return result
 
     def candidate_key(plan):
-        return (-plan.restored_kw, plan.switching_operations, plan.estimated_loss_kw)
+        return (
+            -_plan_priority_load_score(plan),
+            -plan.restored_kw,
+            plan.switching_operations,
+            plan.estimated_loss_kw,
+        )
 
     plans.sort(key=candidate_key)
     if strategy == "baseline":
@@ -253,32 +262,26 @@ def evaluate_restoration_plans(
             ) not in evaluated]
             if not remaining:
                 break
-            feasible = [
+            electrically_feasible = [
                 r for r in results
-                if r.converged
-                   and r.voltage_feasible
-                   and r.graph_electrical_consistent
-                   and r.thermal_status == "PASS"
+                if passes_electrical_checks(r)
             ]
-            if feasible:
-                best_load = max(r.plan.restored_kw for r in feasible)
+            # Adaptive search may use electrical results to guide evaluation
+            # even when thermal compliance is unassessed. Final ranking and
+            # full-verification eligibility still require thermal PASS.
+            if electrically_feasible:
+                best_priority_load = max(
+                    _plan_priority_load_score(r.plan)
+                    for r in electrically_feasible
+                )
                 remaining.sort(key=lambda p: (
-                    p.restored_kw < best_load,
+                    _plan_priority_load_score(p) < best_priority_load,
+                    -_plan_priority_load_score(p),
                     -p.restored_kw,
                     p.estimated_loss_kw,
                     p.switching_operations,
                 ))
             evaluate_and_report(remaining[0])
 
-    results.sort(key=lambda r: (
-        not (
-                r.converged
-                and r.voltage_feasible
-                and r.graph_electrical_consistent
-                and r.thermal_status == "PASS"
-        ),
-        -r.plan.restored_kw,
-        r.real_losses_kw if r.real_losses_kw is not None else float("inf"),
-        r.plan.switching_operations,
-    ))
+    results.sort(key=restoration_rank)
     return results[:max_results]

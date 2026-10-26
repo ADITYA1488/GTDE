@@ -1,6 +1,7 @@
 
 from time import perf_counter
 
+from src.restoration_reporting import classify_candidates
 from src.restoration_powerflow import evaluate_restoration_plans
 
 
@@ -32,15 +33,12 @@ def compare_strategies(
 
         elapsed = perf_counter() - start
 
-        feasible = [
-            result for result in results
-            if result.converged
-            and result.voltage_feasible
-            and result.graph_electrical_consistent
-        ]
+        groups = classify_candidates(results)
+        electrically_feasible = groups["electrically_feasible"]
+        fully_verified = groups["fully_verified"]
 
         best = max(
-            feasible,
+            electrically_feasible,
             key=lambda result: (
                 result.plan.restored_kw,
                 -(result.real_losses_kw or float("inf")),
@@ -51,11 +49,12 @@ def compare_strategies(
         comparison.append({
             "Strategy": strategy,
             "Candidates returned": len(results),
-            "Feasible candidates": len(feasible),
-            "Best restored load (kW)": (
+            "Electrically feasible candidates": len(electrically_feasible),
+            "Fully verified candidates": len(fully_verified),
+            "Best graph-connected load (kW)": (
                 best.plan.restored_kw if best else None
             ),
-            "Restoration (%)": (
+            "Graph-connected restoration (%)": (
                 best.plan.restoration_pct if best else None
             ),
             "Minimum voltage (pu)": (
@@ -68,7 +67,7 @@ def compare_strategies(
                 best.plan.switching_operations if best else None
             ),
             "Runtime (s)": round(elapsed, 3),
-            "Thermal status": "UNASSESSED",
+            "Thermal status": best.thermal_status if best else "UNASSESSED",
         })
 
     return comparison
